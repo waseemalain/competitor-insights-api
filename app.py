@@ -3,7 +3,6 @@ import googlemaps
 
 app = Flask(__name__)
 
-# Replace this with your actual Google Maps API Key
 API_KEY = "AIzaSyCGVV0DNXMdOWRDfQ86Y51ikxhiSlbIlxA"
 gmaps = googlemaps.Client(key=API_KEY)
 
@@ -13,7 +12,6 @@ def get_insights():
     address = data.get("address")
     category = data.get("category")
 
-    # Get latitude & longitude from address
     geocode_result = gmaps.geocode(address)
     if not geocode_result:
         return jsonify({"error": "Invalid address"}), 400
@@ -21,23 +19,18 @@ def get_insights():
     location = geocode_result[0]["geometry"]["location"]
     lat, lng = location["lat"], location["lng"]
 
-    # Get competitor data within 3 miles
     places_result = gmaps.places_nearby(
         location=(lat, lng),
-        radius=4828,  # 3 miles in meters
+        radius=4828,
         keyword=category
     )
 
-    competitors = []
-    for place in places_result.get("results", []):
-        competitors.append({
-            "name": place.get("name", "N/A"),
-            "address": place.get("vicinity", "N/A"),
-            "rating": place.get("rating", "N/A"),
-            "reviews": place.get("user_ratings_total", "N/A")
-        })
+    competitors = [{"name": place["name"], "address": place.get("vicinity", "N/A"),
+                    "rating": place.get("rating", "N/A"), "reviews": place.get("user_ratings_total", "N/A")}
+                   for place in places_result.get("results", [])]
 
     return jsonify(competitors)
 
 if __name__ == '__main__':
     app.run(debug=True)
+
