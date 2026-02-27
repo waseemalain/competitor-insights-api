@@ -11,46 +11,53 @@ def root():
     return {"status": "Pali Analytics API running"}
 
 @app.get("/competitors")
-def get_competitors(address: str, category: str, radius: int = 3000):
-    
-    # Step 1: Geocode address
-    geo_url = f"https://maps.googleapis.com/maps/api/geocode/json"
-    geo_params = {
-        "address": address,
-        "key": GOOGLE_API_KEY
-    }
+def get_competitors(address: str, category: str, limit: int = 20):
+    if not GOOGLE_API_KEY:
+        return {"error": "Missing GOOGLE_API_KEY env var"}
+
+    # Geocode address (so we can echo a center point back; optional but useful)
+    geo_url = "https://maps.googleapis.com/maps/api/geocode/json"
+    geo_params = {"address": address, "key": GOOGLE_API_KEY}
     geo_response = requests.get(geo_url, params=geo_params).json()
 
-    if not geo_response["results"]:
-        return {"error": "Invalid address"}
+    if geo_response.get("status") != "OK" or not geo_response.get("results"):
+        return {
+            "error": "Geocoding failed",
+            "geocode_status": geo_response.get("status"),
+            "geocode_response": geo_response,
+        }
 
-    location = geo_response["results"][0]["geometry"]["location"]
-    lat = location["lat"]
-    lng = location["lng"]
+    loc = geo_response["results"][0]["geometry"]["location"]
+    lat, lng = loc["lat"], loc["lng"]
 
-    # Step 2: Search nearby places
-    places_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-    places_params = {
-        "location": f"{lat},{lng}",
-        "radius": radius,
-        "keyword": category,
-        "key": GOOGLE_API_KEY
-    }
+    # Places Text Search (reliable): "<category> near <address>"
+    text_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+    query = f"{category} near {address}"
+    text_params = {"query": query, "key": GOOGLE_API_KEY}
+    text_response = requests.get(text_url, params=text_params).json()
 
-    places_response = requests.get(places_url, params=places_params).json()
+    status = text_response.get("status")
+    if status not in ["OK", "ZERO_RESULTS"]:
+        return {
+            "error": "Places text search failed",
+            "places_status": status,
+            "places_response": text_response,
+        }
 
-    competitors = []
+    results = text_response.get("results", [])[: max(1, min(limit, 60))]
 
-    for place in places_response.get("results", []):
-        competitors.append({
-            "name": place.get("name"),
-            "rating": place.get("rating"),
-            "reviews": place.get("user_ratings_total"),
-            "address": place.get("vicinity")
-        })
+    competitors = [{
+        "name": p.get("name"),
+        "rating": p.get("rating"),
+        "reviews": p.get("user_ratings_total"),
+        "address": p.get("formatted_address"),
+        "place_id": p.get("place_id"),
+    } for p in results]
 
     return {
-        "address": address,
-        "category": category,
-        "competitors": competitors
+        "query": query,
+        "center": {"lat": lat, "lng": lng},
+        "competitors_found": len(competitors),
+        "competitors": competitors,
+        "places_status": status,
     }
