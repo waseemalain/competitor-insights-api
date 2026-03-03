@@ -1,63 +1,78 @@
 from fastapi import FastAPI
 import requests
 import os
+import time
 
 app = FastAPI()
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+
 @app.get("/")
 def root():
     return {"status": "Pali Analytics API running"}
 
+
+def get_client_place_id(business_name: str, address: str):
+    search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+    query = f"{business_name} {address}"
+    params = {"query": query, "key": GOOGLE_API_KEY}
+    response = requests.get(search_url, params=params).json()
+
+    if response.get("results"):
+        return response["results"][0].get("place_id")
+
+    return None
+
+
 @app.get("/competitors")
-def get_competitors(address: str, category: str, limit: int = 20):
+def get_competitors(business_name: str, address: str, category: str):
+
     if not GOOGLE_API_KEY:
-        return {"error": "Missing GOOGLE_API_KEY env var"}
+        return {"error": "Missing GOOGLE_API_KEY"}
 
-    # Geocode address (so we can echo a center point back; optional but useful)
-    geo_url = "https://maps.googleapis.com/maps/api/geocode/json"
-    geo_params = {"address": address, "key": GOOGLE_API_KEY}
-    geo_response = requests.get(geo_url, params=geo_params).json()
+    # 1️⃣ Get client place_id
+    client_place_id = get_client_place_id(business_name, address)
 
-    if geo_response.get("status") != "OK" or not geo_response.get("results"):
-        return {
-            "error": "Geocoding failed",
-            "geocode_status": geo_response.get("status"),
-            "geocode_response": geo_response,
-        }
-
-    loc = geo_response["results"][0]["geometry"]["location"]
-    lat, lng = loc["lat"], loc["lng"]
-
-    # Places Text Search (reliable): "<category> near <address>"
-    text_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+    # 2️⃣ Search competitors
+    search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
     query = f"{category} near {address}"
-    text_params = {"query": query, "key": GOOGLE_API_KEY}
-    text_response = requests.get(text_url, params=text_params).json()
+    params = {"query": query, "key": GOOGLE_API_KEY}
 
-    status = text_response.get("status")
-    if status not in ["OK", "ZERO_RESULTS"]:
-        return {
-            "error": "Places text search failed",
-            "places_status": status,
-            "places_response": text_response,
+    response = requests.get(search_url, params=params).json()
+
+    if response.get("status") not in ["OK", "ZERO_RESULTS"]:
+        return {"error": "Places search failed", "details": response}
+
+    all_results = response.get("results", [])
+
+    # Handle pagination (up to 3 pages)
+    while "next_page_token" in response:
+        time.sleep(2)  # required by Google
+        params = {
+            "pagetoken": response["next_page_token"],
+            "key": GOOGLE_API_KEY,
         }
+        response = requests.get(search_url, params=params).json()
+        all_results.extend(response.get("results", []))
 
-    results = text_response.get("results", [])[: max(1, min(limit, 60))]
+    competitors = []
 
-    competitors = [{
-        "name": p.get("name"),
-        "rating": p.get("rating"),
-        "reviews": p.get("user_ratings_total"),
-        "address": p.get("formatted_address"),
-        "place_id": p.get("place_id"),
-    } for p in results]
+    for place in all_results:
+        # 🚫 Exclude client itself
+        if place.get("place_id") == client_place_id:
+            continue
+
+        competitors.append({
+            "name": place.get("name"),
+            "rating": place.get("rating"),
+            "reviews": place.get("user_ratings_total"),
+            "address": place.get("formatted_address"),
+            "place_id": place.get("place_id"),
+        })
 
     return {
-        "query": query,
-        "center": {"lat": lat, "lng": lng},
+        "client_place_id": client_place_id,
         "competitors_found": len(competitors),
-        "competitors": competitors,
-        "places_status": status,
+        "competitors": competitors
     }
