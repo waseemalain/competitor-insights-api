@@ -4,6 +4,11 @@ from fastapi import FastAPI
 import requests
 import os
 import time
+from sqlalchemy.orm import Session
+from database import SessionLocal
+from models import User, Location
+from datetime import datetime
+
 
 app = FastAPI()
 
@@ -192,4 +197,48 @@ def competitors(business_name: str, address: str):
         "radius_1_mile": radius1,
         "radius_3_mile": radius3,
         "radius_5_mile": radius5
+    }
+@app.post("/signup")
+def signup(email: str, password: str, business_name: str, address: str):
+
+    db: Session = SessionLocal()
+
+    # Check if user already exists
+    existing = db.query(User).filter(User.email == email).first()
+
+    if existing:
+        return {"error": "User already exists"}
+
+    # Find the business on Google
+    client = get_client_info(business_name, address)
+
+    if not client:
+        return {"error": "Business not found. Please use your exact Google Maps business name."}
+
+    # Create user
+    new_user = User(
+        email=email,
+        password_hash=password,
+        created_at=datetime.utcnow()
+    )
+
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    # Lock business location
+    location = Location(
+        user_id=new_user.id,
+        business_name=client["name"],
+        address=address,
+        place_id=client["place_id"]
+    )
+
+    db.add(location)
+    db.commit()
+
+    return {
+        "status": "account_created",
+        "business": client["name"],
+        "place_id": client["place_id"]
     }
