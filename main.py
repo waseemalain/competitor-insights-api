@@ -1,9 +1,13 @@
+from database import engine
+from models import Base
 from fastapi import FastAPI
 import requests
 import os
 import time
 
 app = FastAPI()
+
+Base.metadata.create_all(bind=engine)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
