@@ -12,6 +12,41 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 def root():
     return {"status": "Pali Analytics API running"}
 
+@app.get("/validate-business")
+def validate_business(business_name: str, address: str):
+
+    url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+
+    params = {
+        "query": f"{business_name} {address}",
+        "key": GOOGLE_API_KEY
+    }
+
+    response = requests.get(url, params=params).json()
+
+    results = response.get("results", [])
+
+    if not results:
+        return {
+            "error": "Business not found. Please use the exact business name from Google Maps."
+        }
+
+    top_results = []
+
+    for r in results[:3]:
+
+        top_results.append({
+            "name": r.get("name"),
+            "address": r.get("formatted_address"),
+            "rating": r.get("rating"),
+            "reviews": r.get("user_ratings_total"),
+            "place_id": r.get("place_id")
+        })
+
+    return {
+        "matches_found": len(top_results),
+        "results": top_results
+    }
 
 def miles_to_meters(miles):
     return int(miles * 1609.34)
