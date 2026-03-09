@@ -1,19 +1,13 @@
-from database import engine
-from models import Base
+from database import engine, SessionLocal
+from models import Base, User, Location
 from fastapi import FastAPI
 import requests
 import os
 import time
 from sqlalchemy.orm import Session
-from database import SessionLocal
-from models import User, Location
-from datetime import datetime
-from jose import JWTError, jwt
-from passlib.context import CryptContext
 from datetime import datetime, timedelta
-from sqlalchemy.orm import Session
-from database import SessionLocal
-from models import User, Location
+from jose import jwt
+from passlib.context import CryptContext
 
 app = FastAPI()
 
@@ -28,6 +22,8 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 
+# ---------------- PASSWORD HELPERS ----------------
+
 def hash_password(password: str):
     return pwd_context.hash(password)
 
@@ -35,9 +31,30 @@ def hash_password(password: str):
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
+
+# ---------------- TOKEN CREATION ----------------
+
+def create_access_token(data: dict):
+
+    to_encode = data.copy()
+
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+
+    to_encode.update({"exp": expire})
+
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+    return encoded_jwt
+
+
+# ---------------- ROOT ----------------
+
 @app.get("/")
 def root():
     return {"status": "Pali Analytics API running"}
+
+
+# ---------------- VALIDATE BUSINESS ----------------
 
 @app.get("/validate-business")
 def validate_business(business_name: str, address: str):
@@ -75,30 +92,8 @@ def validate_business(business_name: str, address: str):
         "results": top_results
     }
 
-def miles_to_meters(miles):
-    return int(miles * 1609.34)
 
-
-def infer_keyword(name, types):
-    name = name.lower()
-
-    if "pizza" in name:
-        return "pizza"
-
-    if "dentist" in types:
-        return "dentist"
-
-    if "plumber" in types:
-        return "plumber"
-
-    if "beauty_salon" in types:
-        return "salon"
-
-    if "gym" in types:
-        return "gym"
-
-    return None
-
+# ---------------- CLIENT INFO ----------------
 
 def get_client_info(business_name, address):
 
@@ -127,6 +122,34 @@ def get_client_info(business_name, address):
     }
 
 
+# ---------------- COMPETITOR LOGIC ----------------
+
+def miles_to_meters(miles):
+    return int(miles * 1609.34)
+
+
+def infer_keyword(name, types):
+
+    name = name.lower()
+
+    if "pizza" in name:
+        return "pizza"
+
+    if "dentist" in types:
+        return "dentist"
+
+    if "plumber" in types:
+        return "plumber"
+
+    if "beauty_salon" in types:
+        return "salon"
+
+    if "gym" in types:
+        return "gym"
+
+    return None
+
+
 def get_nearby(lat, lng, radius, keyword, client_place_id):
 
     url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
@@ -143,6 +166,7 @@ def get_nearby(lat, lng, radius, keyword, client_place_id):
     results = response.get("results", [])
 
     while "next_page_token" in response:
+
         time.sleep(2)
 
         params = {
@@ -151,6 +175,7 @@ def get_nearby(lat, lng, radius, keyword, client_place_id):
         }
 
         response = requests.get(url, params=params).json()
+
         results.extend(response.get("results", []))
 
     competitors = []
@@ -170,6 +195,8 @@ def get_nearby(lat, lng, radius, keyword, client_place_id):
 
     return competitors
 
+
+# ---------------- COMPETITOR ENDPOINT ----------------
 
 @app.get("/competitors")
 def competitors(business_name: str, address: str):
@@ -216,24 +243,25 @@ def competitors(business_name: str, address: str):
         "radius_3_mile": radius3,
         "radius_5_mile": radius5
     }
+
+
+# ---------------- SIGNUP ----------------
+
 @app.post("/signup")
 def signup(email: str, password: str, business_name: str, address: str):
 
     db: Session = SessionLocal()
 
-    # Check if user already exists
     existing = db.query(User).filter(User.email == email).first()
 
     if existing:
         return {"error": "User already exists"}
 
-    # Find the business on Google
     client = get_client_info(business_name, address)
 
     if not client:
         return {"error": "Business not found. Please use your exact Google Maps business name."}
 
-    # Create user
     new_user = User(
         email=email,
         password_hash=hash_password(password),
@@ -244,19 +272,6 @@ def signup(email: str, password: str, business_name: str, address: str):
     db.commit()
     db.refresh(new_user)
 
-def create_access_token(data: dict):
-
-    to_encode = data.copy()
-
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-
-    to_encode.update({"exp": expire})
-
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-    return encoded_jwt
-    
-    # Lock business location
     location = Location(
         user_id=new_user.id,
         business_name=client["name"],
@@ -274,6 +289,9 @@ def create_access_token(data: dict):
         "business": client["name"],
         "place_id": client["place_id"]
     }
+
+
+# ---------------- LOGIN ----------------
 
 @app.post("/login")
 def login(email: str, password: str):
