@@ -9,6 +9,7 @@ from passlib.context import CryptContext
 import requests
 import os
 import time
+import urllib.parse
 
 CENSUS_API = "https://api.census.gov/data/2022/acs/acs5"
 
@@ -24,6 +25,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 # Initialize password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 
 
 # ---------------- PASSWORD HELPERS ----------------
@@ -47,7 +49,21 @@ def verify_password(plain_password, hashed_password):
         
     return pwd_context.verify(pwd_bytes.decode("utf-8", errors="ignore"), hashed_password)
 
+---------------------------------------------
 
+def generate_multi_marker_url(client_address, competitors):
+    base_url = "https://www.google.com/maps/dir/"
+    
+    # 1. Start with the client's address
+    locations = [urllib.parse.quote(client_address)]
+    
+    # 2. Add competitor addresses (Google Maps allows up to 10 stops in a URL)
+    # We will take the first 9 competitors + the client
+    for comp in competitors[:9]:
+        locations.append(urllib.parse.quote(comp['address']))
+    
+    return base_url + "/".join(locations)
+------------------------------------------------------------------
 def get_market_data(lat, lng):
     try:
         # 1. Get Census Tract from FCC (This is a great, free way to do it)
