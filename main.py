@@ -231,7 +231,9 @@ def signup(email: str, password: str, business_name: str, address: str):
         user_id=new_user.id,
         business_name=client["name"],
         address=address,
-        place_id=client["place_id"]
+        place_id=client["place_id"],
+        lat=str(client["lat"]),
+        lng=str(client["lng"])
     )
 
     db.add(location)
