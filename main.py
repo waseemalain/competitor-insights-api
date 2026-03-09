@@ -8,7 +8,12 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import User, Location
 from datetime import datetime
-
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from datetime import datetime, timedelta
+from sqlalchemy.orm import Session
+from database import SessionLocal
+from models import User, Location
 
 app = FastAPI()
 
@@ -16,6 +21,19 @@ Base.metadata.create_all(bind=engine)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+SECRET_KEY = "CHANGE_THIS_LATER"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+
+def hash_password(password: str):
+    return pwd_context.hash(password)
+
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
 
 @app.get("/")
 def root():
