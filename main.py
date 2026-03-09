@@ -18,7 +18,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-SECRET_KEY = "CHANGE_THIS_LATER"
+SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
@@ -246,45 +246,47 @@ class SignupRequest(BaseModel):
 
 @app.post("/signup")
 def signup(data: SignupRequest):
-
     db: Session = SessionLocal()
+    try:
+        existing = db.query(User).filter(User.email == data.email).first()
+        if existing:
+            return {"error": "User already exists"}
 
-    existing = db.query(User).filter(User.email == data.email).first()
-    if existing:
-        return {"error": "User already exists"}
+        client = get_client_info(data.business_name, data.address)
+        if not client:
+            return {"error": "Business not found. Please use your exact Google Maps business name."}
 
-    client = get_client_info(data.business_name, data.address)
-    if not client:
-        return {"error": "Business not found. Please use your exact Google Maps business name."}
+        new_user = User(
+            email=data.email,
+            password_hash=hash_password(data.password),
+            plan="starter",
+            created_at=datetime.utcnow()
+        )
 
-    new_user = User(
-        email=data.email,
-        password_hash=hash_password(data.password),
-        plan="starter",
-        created_at=datetime.utcnow()
-    )
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
 
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+        location = Location(
+            user_id=new_user.id,
+            business_name=client["name"],
+            address=data.address,
+            place_id=client["place_id"],
+            lat=client["lat"],
+            lng=client["lng"]
+        )
 
-    location = Location(
-        user_id=new_user.id,
-        business_name=client["name"],
-        address=data.address,
-        place_id=client["place_id"],
-        lat=client["lat"],
-        lng=client["lng"]
-    )
+        db.add(location)
+        db.commit()
 
-    db.add(location)
-    db.commit()
+        return {
+            "status": "account_created",
+            "business": client["name"],
+            "place_id": client["place_id"]
+        }
 
-    return {
-        "status": "account_created",
-        "business": client["name"],
-        "place_id": client["place_id"]
-    }
+    finally:
+        db.close()
 
 
 # ---------------- LOGIN MODEL ----------------
@@ -298,22 +300,24 @@ class LoginRequest(BaseModel):
 
 @app.post("/login")
 def login(data: LoginRequest):
-
     db: Session = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == data.email).first()
 
-    user = db.query(User).filter(User.email == data.email).first()
+        if not user:
+            return {"error": "Invalid credentials"}
 
-    if not user:
-        return {"error": "Invalid credentials"}
+        if not verify_password(data.password, user.password_hash):
+            return {"error": "Invalid credentials"}
 
-    if not verify_password(data.password, user.password_hash):
-        return {"error": "Invalid credentials"}
+        access_token = create_access_token(
+            data={"user_id": user.id}
+        )
 
-    access_token = create_access_token(
-        data={"user_id": user.id}
-    )
+        return {
+            "access_token": access_token,
+            "token_type": "bearer"
+        }
 
-    return {
-        "access_token": access_token,
-        "token_type": "bearer"
-    }
+    finally:
+        db.close()
