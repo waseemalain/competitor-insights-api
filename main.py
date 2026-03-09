@@ -261,13 +261,31 @@ def signup(data: SignupRequest):
 def login(data: LoginRequest):
     db: Session = SessionLocal()
     try:
+        # 1. Normalize email (just like signup)
         email_clean = data.email.lower().strip()
         user = db.query(User).filter(User.email == email_clean).first()
 
-        if not user or not verify_password(data.password, user.password_hash):
+        if not user:
             return {"error": "Invalid credentials"}
 
-        access_token = create_access_token(data={"user_id": user.id})
-        return {"access_token": access_token, "token_type": "bearer"}
+        # 2. Verify password with the same truncation logic
+        if not verify_password(data.password, user.password_hash):
+            return {"error": "Invalid credentials"}
+
+        # 3. Create token - check if SECRET_KEY exists
+        if not SECRET_KEY:
+             raise HTTPException(status_code=500, detail="Server Configuration Error: Missing SECRET_KEY")
+
+        access_token = create_access_token(
+            data={"user_id": user.id}
+        )
+
+        return {
+            "access_token": access_token,
+            "token_type": "bearer"
+        }
+    except Exception as e:
+        # This will show you the EXACT error in the response body
+        raise HTTPException(status_code=500, detail=f"Login error: {str(e)}")
     finally:
         db.close()
