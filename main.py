@@ -25,14 +25,24 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # ---------------- PASSWORD HELPERS ----------------
 
+
 def hash_password(password: str):
-    # Bcrypt has a 72-byte limit. Truncating prevents the 500 ValueError.
-    return pwd_context.hash(str(password)[:72])
+    # Force to string, encode to bytes to check actual byte length, then truncate
+    pwd_bytes = str(password).encode("utf-8")
+    if len(pwd_bytes) > 72:
+        pwd_bytes = pwd_bytes[:72]
+    
+    # Passlib needs a string, so we decode back after ensuring byte-length is safe
+    return pwd_context.hash(pwd_bytes.decode("utf-8", errors="ignore"))
 
 
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(str(plain_password)[:72], hashed_password)
-
+    # Apply the same logic for verification
+    pwd_bytes = str(plain_password).encode("utf-8")
+    if len(pwd_bytes) > 72:
+        pwd_bytes = pwd_bytes[:72]
+        
+    return pwd_context.verify(pwd_bytes.decode("utf-8", errors="ignore"), hashed_password)
 
 # ---------------- TOKEN CREATION ----------------
 
