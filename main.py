@@ -265,6 +265,7 @@ def signup(email: str, password: str, business_name: str, address: str):
     new_user = User(
         email=email,
         password_hash=hash_password(password),
+        plan="starter",
         created_at=datetime.utcnow()
     )
 
@@ -277,8 +278,8 @@ def signup(email: str, password: str, business_name: str, address: str):
         business_name=client["name"],
         address=address,
         place_id=client["place_id"],
-        lat=str(client["lat"]),
-        lng=str(client["lng"])
+        lat=client["lat"],
+        lng=client["lng"]
     )
 
     db.add(location)
