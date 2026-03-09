@@ -236,7 +236,7 @@ def signup(email: str, password: str, business_name: str, address: str):
     # Create user
     new_user = User(
         email=email,
-        password_hash=password,
+        password_hash=hash_password(password),
         created_at=datetime.utcnow()
     )
 
@@ -244,6 +244,18 @@ def signup(email: str, password: str, business_name: str, address: str):
     db.commit()
     db.refresh(new_user)
 
+    def create_access_token(data: dict):
+
+    to_encode = data.copy()
+
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+
+    to_encode.update({"exp": expire})
+
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+    return encoded_jwt
+    
     # Lock business location
     location = Location(
         user_id=new_user.id,
@@ -261,4 +273,26 @@ def signup(email: str, password: str, business_name: str, address: str):
         "status": "account_created",
         "business": client["name"],
         "place_id": client["place_id"]
+    }
+
+@app.post("/login")
+def login(email: str, password: str):
+
+    db: Session = SessionLocal()
+
+    user = db.query(User).filter(User.email == email).first()
+
+    if not user:
+        return {"error": "Invalid credentials"}
+
+    if not verify_password(password, user.password_hash):
+        return {"error": "Invalid credentials"}
+
+    access_token = create_access_token(
+        data={"user_id": user.id}
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
     }
