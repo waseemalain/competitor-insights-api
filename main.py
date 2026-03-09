@@ -26,6 +26,18 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60
 # Initialize password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+# ---------------- MODELS ----------------
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+    business_name: str
+    address: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
 # ---------------- HELPERS ----------------
 
 def hash_password(password: str):
@@ -40,12 +52,17 @@ def verify_password(plain_password, hashed_password):
         pwd_bytes = pwd_bytes[:72]
     return pwd_context.verify(pwd_bytes.decode("utf-8", errors="ignore"), hashed_password)
 
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
 def generate_multi_marker_url(client_address, competitors):
-    # Google Maps Search URL with markers (more modern approach)
+    # This generates a Google Maps route URL which pins multiple locations
     base_url = "https://www.google.com/maps/dir/"
     locations = [urllib.parse.quote(client_address)]
-    # Add first 5 competitors as stops (URLs have limits)
-    for comp in competitors[:5]:
+    for comp in competitors[:9]: # Max 10 stops
         locations.append(urllib.parse.quote(comp['address']))
     return base_url + "/".join(locations)
 
@@ -66,7 +83,11 @@ def get_market_data(lat, lng):
             return {"population": "N/A", "median_income": "N/A", "median_age": "N/A"}
         
         data = census_res.json()[1]
-        return {"population": data[0], "median_income": data[1], "median_age": data[2]}
+        return {
+            "population": data[0], 
+            "median_income": f"${int(data[1]):,}" if data[1] and int(data[1]) > 0 else "N/A", 
+            "median_age": data[2]
+        }
     except:
         return {"population": "Error", "median_income": "Error", "median_age": "Error"}
 
@@ -89,18 +110,16 @@ def get_client_info(business_name, address):
 def get_nearby(lat, lng, radius, keyword, client_place_id):
     url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
     params = {"location": f"{lat},{lng}", "radius": radius, "keyword": keyword, "key": GOOGLE_API_KEY}
-    results = []
     response = requests.get(url, params=params).json()
-    results.extend(response.get("results", []))
+    raw_results = response.get("results", [])
     
-    # We only take top results to keep it fast
     return [{
         "name": p.get("name"),
         "rating": p.get("rating"),
         "reviews": p.get("user_ratings_total"),
         "address": p.get("vicinity"),
         "place_id": p.get("place_id")
-    } for p in results if p.get("place_id") != client_place_id]
+    } for p in raw_results if p.get("place_id") != client_place_id]
 
 # ---------------- ENDPOINTS ----------------
 
@@ -114,15 +133,14 @@ def competitors_endpoint(business_name: str, address: str):
     if not client:
         raise HTTPException(status_code=404, detail="Business not found")
 
-    keyword = "pizza" if "pizza" in client["name"].lower() else "restaurant" # simplified for demo
-    
+    keyword = "pizza" if "pizza" in client["name"].lower() else "restaurant" 
     market = get_market_data(client["lat"], client["lng"])
     
+    # 1609 meters = 1 mile
     r1 = get_nearby(client["lat"], client["lng"], 1609, keyword, client["place_id"])
     r3 = get_nearby(client["lat"], client["lng"], 4828, keyword, client["place_id"])
     r5 = get_nearby(client["lat"], client["lng"], 8046, keyword, client["place_id"])
 
-    # Generate the map link using the closest competitors
     map_link = generate_multi_marker_url(address, r1)
 
     return {
@@ -134,4 +152,58 @@ def competitors_endpoint(business_name: str, address: str):
         "radius_5_mile": r5
     }
 
-# (Keep your SignupRequest, LoginRequest, signup, and login endpoints as they were)
+@app.post("/signup")
+def signup(data: SignupRequest):
+    db: Session = SessionLocal()
+    try:
+        email_clean = data.email.lower().strip()
+        existing = db.query(User).filter(User.email == email_clean).first()
+        if existing: return {"error": "User already exists"}
+
+        client = get_client_info(data.business_name, data.address)
+        if not client: return {"error": "Business not found on Google Maps."}
+
+        new_user = User(
+            email=email_clean,
+            password_hash=hash_password(data.password),
+            plan="starter",
+            created_at=datetime.utcnow()
+        )
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+
+        location = Location(
+            user_id=new_user.id,
+            business_name=client["name"],
+            address=data.address,
+            place_id=client["place_id"],
+            lat=client["lat"],
+            lng=client["lng"]
+        )
+        db.add(location)
+        db.commit()
+
+        return {"status": "account_created", "business": client["name"]}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+@app.post("/login")
+def login(data: LoginRequest):
+    db: Session = SessionLocal()
+    try:
+        email_clean = data.email.lower().strip()
+        user = db.query(User).filter(User.email == email_clean).first()
+        if not user or not verify_password(data.password, user.password_hash):
+            return {"error": "Invalid credentials"}
+
+        if not SECRET_KEY:
+             raise HTTPException(status_code=500, detail="Missing SECRET_KEY in Render settings")
+
+        access_token = create_access_token(data={"user_id": user.id})
+        return {"access_token": access_token, "token_type": "bearer"}
+    finally:
+        db.close()
