@@ -26,10 +26,17 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60
 # ---------------- PASSWORD HELPERS ----------------
 
 def hash_password(password: str):
+    # Ensure password is a clean UTF‑8 string
+    if isinstance(password, bytes):
+        password = password.decode("utf-8", errors="ignore")
+    password = str(password)
     return pwd_context.hash(password)
 
 
 def verify_password(plain_password, hashed_password):
+    if isinstance(plain_password, bytes):
+        plain_password = plain_password.decode("utf-8", errors="ignore")
+    plain_password = str(plain_password)
     return pwd_context.verify(plain_password, hashed_password)
 
 
@@ -100,10 +107,11 @@ def get_client_info(business_name, address):
 
     response = requests.get(url, params=params).json()
 
-    if not response.get("results"):
+    results = response.get("results", [])
+    if not results:
         return None
 
-    result = response["results"][0]
+    result = results[0]
 
     return {
         "place_id": result.get("place_id"),
@@ -256,9 +264,11 @@ def signup(data: SignupRequest):
         if not client:
             return {"error": "Business not found. Please use your exact Google Maps business name."}
 
+        clean_password = str(data.password)
+
         new_user = User(
             email=data.email,
-            password_hash=hash_password(data.password),
+            password_hash=hash_password(clean_password),
             plan="starter",
             created_at=datetime.utcnow()
         )
