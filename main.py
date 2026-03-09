@@ -1,13 +1,14 @@
+from fastapi import FastAPI
+from pydantic import BaseModel
 from database import engine, SessionLocal
 from models import Base, User, Location
-from fastapi import FastAPI
-import requests
-import os
-import time
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from jose import jwt
 from passlib.context import CryptContext
+import requests
+import os
+import time
 
 app = FastAPI()
 
@@ -35,15 +36,10 @@ def verify_password(plain_password, hashed_password):
 # ---------------- TOKEN CREATION ----------------
 
 def create_access_token(data: dict):
-
     to_encode = data.copy()
-
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-
     to_encode.update({"exp": expire})
-
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
     return encoded_jwt
 
 
@@ -67,7 +63,6 @@ def validate_business(business_name: str, address: str):
     }
 
     response = requests.get(url, params=params).json()
-
     results = response.get("results", [])
 
     if not results:
@@ -78,7 +73,6 @@ def validate_business(business_name: str, address: str):
     top_results = []
 
     for r in results[:3]:
-
         top_results.append({
             "name": r.get("name"),
             "address": r.get("formatted_address"),
@@ -162,26 +156,20 @@ def get_nearby(lat, lng, radius, keyword, client_place_id):
     }
 
     response = requests.get(url, params=params).json()
-
     results = response.get("results", [])
 
     while "next_page_token" in response:
-
         time.sleep(2)
-
         params = {
             "pagetoken": response["next_page_token"],
             "key": GOOGLE_API_KEY
         }
-
         response = requests.get(url, params=params).json()
-
         results.extend(response.get("results", []))
 
     competitors = []
 
     for place in results:
-
         if place.get("place_id") == client_place_id:
             continue
 
@@ -245,26 +233,33 @@ def competitors(business_name: str, address: str):
     }
 
 
-# ---------------- SIGNUP ----------------
+# ---------------- SIGNUP MODELS ----------------
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+    business_name: str
+    address: str
+
+
+# ---------------- SIGNUP ENDPOINT ----------------
 
 @app.post("/signup")
-def signup(email: str, password: str, business_name: str, address: str):
+def signup(data: SignupRequest):
 
     db: Session = SessionLocal()
 
-    existing = db.query(User).filter(User.email == email).first()
-
+    existing = db.query(User).filter(User.email == data.email).first()
     if existing:
         return {"error": "User already exists"}
 
-    client = get_client_info(business_name, address)
-
+    client = get_client_info(data.business_name, data.address)
     if not client:
         return {"error": "Business not found. Please use your exact Google Maps business name."}
 
     new_user = User(
-        email=email,
-        password_hash=hash_password(password),
+        email=data.email,
+        password_hash=hash_password(data.password),
         plan="starter",
         created_at=datetime.utcnow()
     )
@@ -276,7 +271,7 @@ def signup(email: str, password: str, business_name: str, address: str):
     location = Location(
         user_id=new_user.id,
         business_name=client["name"],
-        address=address,
+        address=data.address,
         place_id=client["place_id"],
         lat=client["lat"],
         lng=client["lng"]
@@ -292,19 +287,26 @@ def signup(email: str, password: str, business_name: str, address: str):
     }
 
 
-# ---------------- LOGIN ----------------
+# ---------------- LOGIN MODEL ----------------
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+# ---------------- LOGIN ENDPOINT ----------------
 
 @app.post("/login")
-def login(email: str, password: str):
+def login(data: LoginRequest):
 
     db: Session = SessionLocal()
 
-    user = db.query(User).filter(User.email == email).first()
+    user = db.query(User).filter(User.email == data.email).first()
 
     if not user:
         return {"error": "Invalid credentials"}
 
-    if not verify_password(password, user.password_hash):
+    if not verify_password(data.password, user.password_hash):
         return {"error": "Invalid credentials"}
 
     access_token = create_access_token(
