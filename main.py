@@ -118,13 +118,19 @@ def get_client_info(business_name, address):
 # ---------------- MARKET DATA HELPER ----------------
 
 def get_market_data(lat, lng):
+
     try:
-        geo_url = f"https://geo.fcc.gov/api/census/block/find?latitude={lat}&longitude={lng}&format=json"
+
+        # Convert lat/lng to Census tract
+        geo_url = f"https://geocoding.geo.census.gov/geocoder/geographies/coordinates?x={lng}&y={lat}&benchmark=Public_AR_Current&vintage=Current_Current&format=json"
+
         geo = requests.get(geo_url, timeout=20).json()
 
-        state = geo["State"]["FIPS"]
-        county = geo["County"]["FIPS"]
-        tract = geo["Block"]["FIPS"][5:11]
+        tract_info = geo["result"]["geographies"]["Census Tracts"][0]
+
+        state = tract_info["STATE"]
+        county = tract_info["COUNTY"]
+        tract = tract_info["TRACT"]
 
         params = {
             "get": "B01003_001E,B19013_001E,B01002_001E",
@@ -134,26 +140,21 @@ def get_market_data(lat, lng):
 
         response = requests.get(CENSUS_API, params=params, timeout=20).json()
 
-        if len(response) < 2:
-            return {
-                "population": None,
-                "median_income": None,
-                "median_age": None
-            }
-
         data = response[1]
 
         return {
-            "population": data[0],
-            "median_income": data[1],
-            "median_age": data[2]
+            "population": int(data[0]),
+            "median_income": int(data[1]),
+            "median_age": float(data[2])
         }
 
-    except Exception:
+    except Exception as e:
+
         return {
             "population": None,
             "median_income": None,
-            "median_age": None
+            "median_age": None,
+            "error": str(e)
         }
 
 
