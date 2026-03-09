@@ -244,7 +244,7 @@ def signup(email: str, password: str, business_name: str, address: str):
     db.commit()
     db.refresh(new_user)
 
-    def create_access_token(data: dict):
+def create_access_token(data: dict):
 
     to_encode = data.copy()
 
