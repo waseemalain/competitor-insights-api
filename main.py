@@ -49,31 +49,46 @@ def verify_password(plain_password, hashed_password):
 
 
 def get_market_data(lat, lng):
+    try:
+        # 1. Get Census Tract from FCC (This is a great, free way to do it)
+        geo_url = f"https://geo.fcc.gov/api/census/block/find?latitude={lat}&longitude={lng}&format=json"
+        geo_response = requests.get(geo_url)
+        geo_response.raise_for_status()
+        geo = geo_response.json()
 
-    # Convert lat/lng to approximate census tract lookup
-    geo_url = f"https://geo.fcc.gov/api/census/block/find?latitude={lat}&longitude={lng}&format=json"
+        state = geo["State"]["FIPS"]
+        county = geo["County"]["FIPS"]
+        # The block FIPS is 15 digits: [SS][CCC][TTTTTT][BBBB]
+        # Tract is digits 5 through 11
+        tract = geo["Block"]["FIPS"][5:11]
 
-    geo = requests.get(geo_url).json()
+        # 2. Query Census ACS 5-Year Data
+        params = {
+            "get": "B01003_001E,B19013_001E,B01002_001E", # Pop, Income, Age
+            "for": f"tract:{tract}",
+            "in": f"state:{state} county:{county}"
+        }
+        
+        census_res = requests.get(CENSUS_API, params=params)
+        
+        # If Census has no data for this tract, return N/A instead of crashing
+        if census_res.status_code != 200:
+            return {"population": "N/A", "median_income": "N/A", "median_age": "N/A"}
 
-    state = geo["State"]["FIPS"]
-    county = geo["County"]["FIPS"]
-    tract = geo["Block"]["FIPS"][5:11]
+        data = census_res.json()
+        # Census returns [ ["header"], ["values"] ], so we want index 1
+        stats = data[1]
 
-    params = {
-        "get": "B01003_001E,B19013_001E,B01002_001E",
-        "for": f"tract:{tract}",
-        "in": f"state:{state} county:{county}"
-    }
+        return {
+            "population": stats[0],
+            "median_income": stats[1],
+            "median_age": stats[2]
+        }
+    except Exception as e:
+        print(f"Census Error: {e}")
+        return {"population": "Error", "median_income": "Error", "median_age": "Error"}
 
-    response = requests.get(CENSUS_API, params=params).json()
 
-    data = response[1]
-
-    return {
-        "population": data[0],
-        "median_income": data[1],
-        "median_age": data[2]
-    }
     
 # ---------------- TOKEN CREATION ----------------
 
