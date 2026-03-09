@@ -1,5 +1,5 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, EmailStr
 from database import engine, SessionLocal
 from models import Base, User, Location
 from sqlalchemy.orm import Session
@@ -12,32 +12,26 @@ import time
 
 app = FastAPI()
 
+# Create tables on startup
 Base.metadata.create_all(bind=engine)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
+# Initialize password hashing context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # ---------------- PASSWORD HELPERS ----------------
 
 def hash_password(password: str):
-    # Ensure password is a clean UTF‑8 string
-    if isinstance(password, bytes):
-        password = password.decode("utf-8", errors="ignore")
-    password = str(password)
-    return pwd_context.hash(password)
+    # Bcrypt has a 72-byte limit. Truncating prevents the 500 ValueError.
+    return pwd_context.hash(str(password)[:72])
 
 
 def verify_password(plain_password, hashed_password):
-    if isinstance(plain_password, bytes):
-        plain_password = plain_password.decode("utf-8", errors="ignore")
-    plain_password = str(plain_password)
-    return pwd_context.verify(plain_password, hashed_password)
+    return pwd_context.verify(str(plain_password)[:72], hashed_password)
 
 
 # ---------------- TOKEN CREATION ----------------
@@ -61,9 +55,7 @@ def root():
 
 @app.get("/validate-business")
 def validate_business(business_name: str, address: str):
-
     url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-
     params = {
         "query": f"{business_name} {address}",
         "key": GOOGLE_API_KEY
@@ -73,12 +65,9 @@ def validate_business(business_name: str, address: str):
     results = response.get("results", [])
 
     if not results:
-        return {
-            "error": "Business not found. Please use the exact business name from Google Maps."
-        }
+        return {"error": "Business not found. Please use the exact business name from Google Maps."}
 
     top_results = []
-
     for r in results[:3]:
         top_results.append({
             "name": r.get("name"),
@@ -94,25 +83,20 @@ def validate_business(business_name: str, address: str):
     }
 
 
-# ---------------- CLIENT INFO ----------------
+# ---------------- CLIENT INFO HELPER ----------------
 
 def get_client_info(business_name, address):
-
     url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-
     params = {
         "query": f"{business_name} {address}",
         "key": GOOGLE_API_KEY
     }
-
     response = requests.get(url, params=params).json()
 
-    results = response.get("results", [])
-    if not results:
+    if not response.get("results"):
         return None
 
-    result = results[0]
-
+    result = response["results"][0]
     return {
         "place_id": result.get("place_id"),
         "name": result.get("name"),
@@ -131,31 +115,17 @@ def miles_to_meters(miles):
 
 
 def infer_keyword(name, types):
-
     name = name.lower()
-
-    if "pizza" in name:
-        return "pizza"
-
-    if "dentist" in types:
-        return "dentist"
-
-    if "plumber" in types:
-        return "plumber"
-
-    if "beauty_salon" in types:
-        return "salon"
-
-    if "gym" in types:
-        return "gym"
-
+    if "pizza" in name: return "pizza"
+    if "dentist" in types: return "dentist"
+    if "plumber" in types: return "plumber"
+    if "beauty_salon" in types: return "salon"
+    if "gym" in types: return "gym"
     return None
 
 
 def get_nearby(lat, lng, radius, keyword, client_place_id):
-
     url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-
     params = {
         "location": f"{lat},{lng}",
         "radius": radius,
@@ -166,21 +136,17 @@ def get_nearby(lat, lng, radius, keyword, client_place_id):
     response = requests.get(url, params=params).json()
     results = response.get("results", [])
 
+    # Handle pagination for more results
     while "next_page_token" in response:
-        time.sleep(2)
-        params = {
-            "pagetoken": response["next_page_token"],
-            "key": GOOGLE_API_KEY
-        }
+        time.sleep(2)  # Google requires a short delay before the token becomes valid
+        params = {"pagetoken": response["next_page_token"], "key": GOOGLE_API_KEY}
         response = requests.get(url, params=params).json()
         results.extend(response.get("results", []))
 
     competitors = []
-
     for place in results:
         if place.get("place_id") == client_place_id:
             continue
-
         competitors.append({
             "name": place.get("name"),
             "rating": place.get("rating"),
@@ -188,7 +154,6 @@ def get_nearby(lat, lng, radius, keyword, client_place_id):
             "address": place.get("vicinity"),
             "place_id": place.get("place_id")
         })
-
     return competitors
 
 
@@ -196,37 +161,11 @@ def get_nearby(lat, lng, radius, keyword, client_place_id):
 
 @app.get("/competitors")
 def competitors(business_name: str, address: str):
-
     client = get_client_info(business_name, address)
-
     if not client:
         return {"error": "Business not found"}
 
     keyword = infer_keyword(client["name"], client["types"])
-
-    radius1 = get_nearby(
-        client["lat"],
-        client["lng"],
-        miles_to_meters(1),
-        keyword,
-        client["place_id"]
-    )
-
-    radius3 = get_nearby(
-        client["lat"],
-        client["lng"],
-        miles_to_meters(3),
-        keyword,
-        client["place_id"]
-    )
-
-    radius5 = get_nearby(
-        client["lat"],
-        client["lng"],
-        miles_to_meters(5),
-        keyword,
-        client["place_id"]
-    )
 
     return {
         "client": {
@@ -235,19 +174,23 @@ def competitors(business_name: str, address: str):
             "reviews": client["reviews"]
         },
         "keyword_detected": keyword,
-        "radius_1_mile": radius1,
-        "radius_3_mile": radius3,
-        "radius_5_mile": radius5
+        "radius_1_mile": get_nearby(client["lat"], client["lng"], miles_to_meters(1), keyword, client["place_id"]),
+        "radius_3_mile": get_nearby(client["lat"], client["lng"], miles_to_meters(3), keyword, client["place_id"]),
+        "radius_5_mile": get_nearby(client["lat"], client["lng"], miles_to_meters(5), keyword, client["place_id"])
     }
 
 
-# ---------------- SIGNUP MODELS ----------------
+# ---------------- MODELS ----------------
 
 class SignupRequest(BaseModel):
     email: str
     password: str
     business_name: str
     address: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
 
 # ---------------- SIGNUP ENDPOINT ----------------
@@ -256,7 +199,10 @@ class SignupRequest(BaseModel):
 def signup(data: SignupRequest):
     db: Session = SessionLocal()
     try:
-        existing = db.query(User).filter(User.email == data.email).first()
+        # Normalize email
+        email_clean = data.email.lower().strip()
+        
+        existing = db.query(User).filter(User.email == email_clean).first()
         if existing:
             return {"error": "User already exists"}
 
@@ -264,19 +210,18 @@ def signup(data: SignupRequest):
         if not client:
             return {"error": "Business not found. Please use your exact Google Maps business name."}
 
-        clean_password = str(data.password)
-
+        # 1. Create User
         new_user = User(
-            email=data.email,
-            password_hash=hash_password(clean_password),
+            email=email_clean,
+            password_hash=hash_password(data.password),
             plan="starter",
             created_at=datetime.utcnow()
         )
-
         db.add(new_user)
         db.commit()
         db.refresh(new_user)
 
+        # 2. Link Location
         location = Location(
             user_id=new_user.id,
             business_name=client["name"],
@@ -285,7 +230,6 @@ def signup(data: SignupRequest):
             lat=client["lat"],
             lng=client["lng"]
         )
-
         db.add(location)
         db.commit()
 
@@ -294,16 +238,11 @@ def signup(data: SignupRequest):
             "business": client["name"],
             "place_id": client["place_id"]
         }
-
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
-
-
-# ---------------- LOGIN MODEL ----------------
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
 
 
 # ---------------- LOGIN ENDPOINT ----------------
@@ -312,22 +251,13 @@ class LoginRequest(BaseModel):
 def login(data: LoginRequest):
     db: Session = SessionLocal()
     try:
-        user = db.query(User).filter(User.email == data.email).first()
+        email_clean = data.email.lower().strip()
+        user = db.query(User).filter(User.email == email_clean).first()
 
-        if not user:
+        if not user or not verify_password(data.password, user.password_hash):
             return {"error": "Invalid credentials"}
 
-        if not verify_password(data.password, user.password_hash):
-            return {"error": "Invalid credentials"}
-
-        access_token = create_access_token(
-            data={"user_id": user.id}
-        )
-
-        return {
-            "access_token": access_token,
-            "token_type": "bearer"
-        }
-
+        access_token = create_access_token(data={"user_id": user.id})
+        return {"access_token": access_token, "token_type": "bearer"}
     finally:
         db.close()
