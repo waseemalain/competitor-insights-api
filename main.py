@@ -10,6 +10,8 @@ import requests
 import os
 import time
 
+CENSUS_API = "https://api.census.gov/data/2022/acs/acs5"
+
 app = FastAPI()
 
 # Create tables on startup
@@ -22,6 +24,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 # Initialize password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 
 # ---------------- PASSWORD HELPERS ----------------
 
@@ -44,6 +47,34 @@ def verify_password(plain_password, hashed_password):
         
     return pwd_context.verify(pwd_bytes.decode("utf-8", errors="ignore"), hashed_password)
 
+
+def get_market_data(lat, lng):
+
+    # Convert lat/lng to approximate census tract lookup
+    geo_url = f"https://geo.fcc.gov/api/census/block/find?latitude={lat}&longitude={lng}&format=json"
+
+    geo = requests.get(geo_url).json()
+
+    state = geo["State"]["FIPS"]
+    county = geo["County"]["FIPS"]
+    tract = geo["Block"]["FIPS"][5:11]
+
+    params = {
+        "get": "B01003_001E,B19013_001E,B01002_001E",
+        "for": f"tract:{tract}",
+        "in": f"state:{state} county:{county}"
+    }
+
+    response = requests.get(CENSUS_API, params=params).json()
+
+    data = response[1]
+
+    return {
+        "population": data[0],
+        "median_income": data[1],
+        "median_age": data[2]
+    }
+    
 # ---------------- TOKEN CREATION ----------------
 
 def create_access_token(data: dict):
@@ -171,11 +202,16 @@ def get_nearby(lat, lng, radius, keyword, client_place_id):
 
 @app.get("/competitors")
 def competitors(business_name: str, address: str):
+
     client = get_client_info(business_name, address)
+
     if not client:
         return {"error": "Business not found"}
 
     keyword = infer_keyword(client["name"], client["types"])
+
+    # NEW: Get census market data
+    market = get_market_data(client["lat"], client["lng"])
 
     return {
         "client": {
@@ -183,12 +219,36 @@ def competitors(business_name: str, address: str):
             "rating": client["rating"],
             "reviews": client["reviews"]
         },
-        "keyword_detected": keyword,
-        "radius_1_mile": get_nearby(client["lat"], client["lng"], miles_to_meters(1), keyword, client["place_id"]),
-        "radius_3_mile": get_nearby(client["lat"], client["lng"], miles_to_meters(3), keyword, client["place_id"]),
-        "radius_5_mile": get_nearby(client["lat"], client["lng"], miles_to_meters(5), keyword, client["place_id"])
-    }
 
+        # NEW MARKET DATA
+        "market_data": market,
+
+        "keyword_detected": keyword,
+
+        "radius_1_mile": get_nearby(
+            client["lat"],
+            client["lng"],
+            miles_to_meters(1),
+            keyword,
+            client["place_id"]
+        ),
+
+        "radius_3_mile": get_nearby(
+            client["lat"],
+            client["lng"],
+            miles_to_meters(3),
+            keyword,
+            client["place_id"]
+        ),
+
+        "radius_5_mile": get_nearby(
+            client["lat"],
+            client["lng"],
+            miles_to_meters(5),
+            keyword,
+            client["place_id"]
+        )
+    }
 
 # ---------------- MODELS ----------------
 
