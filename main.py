@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from database import engine, SessionLocal
-from models import Base, User, Location
+from models import Base, User, Location, AnalysisResult
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from jose import jwt
@@ -309,7 +309,44 @@ def competitors(business_name: str, address: str):
         "radius_5_mile": radius5
     }
 
+# ---------------- ANALYSIS RESULTS ---------------
 
+@app.get("/analysis-history")
+def analysis_history():
+
+    db: Session = SessionLocal()
+
+    try:
+
+        results = (
+            db.query(AnalysisResult)
+            .order_by(AnalysisResult.created_at.desc())
+            .all()
+        )
+
+        data = []
+
+        for r in results:
+
+            data.append({
+
+                "business_name": r.business_name,
+                "competitors_1_mile": r.competitors_1_mile,
+                "competitors_3_mile": r.competitors_3_mile,
+                "competitors_5_mile": r.competitors_5_mile,
+                "population": r.population,
+                "median_income": r.median_income,
+                "median_age": r.median_age,
+                "created_at": r.created_at
+
+            })
+
+        return data
+
+    finally:
+
+        db.close()
+        
 # ---------------- MODELS ----------------
 
 class SignupRequest(BaseModel):
