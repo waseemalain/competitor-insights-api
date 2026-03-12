@@ -255,6 +255,38 @@ def competitors(business_name: str, address: str):
     radius3 = get_nearby(client["lat"], client["lng"], miles_to_meters(3), keyword, client["place_id"])
     radius5 = get_nearby(client["lat"], client["lng"], miles_to_meters(5), keyword, client["place_id"])
 
+
+    db: Session = SessionLocal()
+
+    analysis = AnalysisResult(
+    
+        user_id=1,  # temporary until we wire login tokens
+    
+        place_id=client["place_id"],
+    
+        business_name=client["name"],
+    
+        competitors_1_mile=len(radius1),
+    
+        competitors_3_mile=len(radius3),
+    
+        competitors_5_mile=len(radius5),
+    
+        population=market.get("population"),
+    
+        median_income=market.get("median_income"),
+    
+        median_age=market.get("median_age")
+    
+    )
+    
+    db.add(analysis)
+    
+    db.commit()
+    
+    db.close()
+
+
     summary = {
         "competitors_1_mile": len(radius1),
         "competitors_3_mile": len(radius3),
