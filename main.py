@@ -12,17 +12,17 @@ import time
 
 app = FastAPI()
 
-# Create tables on startup
 Base.metadata.create_all(bind=engine)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 SECRET_KEY = os.getenv("SECRET_KEY")
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
 CENSUS_API = "https://api.census.gov/data/2022/acs/acs5"
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 # ---------------- PASSWORD HELPERS ----------------
 
@@ -74,7 +74,7 @@ def validate_business(business_name: str, address: str):
     results = response.get("results", [])
 
     if not results:
-        return {"error": "Business not found. Please use the exact business name from Google Maps."}
+        return {"error": "Business not found"}
 
     top_results = []
 
@@ -130,21 +130,21 @@ def get_market_data(lat, lng):
 
         geo_url = f"https://geocoding.geo.census.gov/geocoder/geographies/coordinates?x={lng}&y={lat}&benchmark=Public_AR_Current&vintage=Current_Current&format=json"
 
-        geo = requests.get(geo_url, timeout=20).json()
+        geo = requests.get(geo_url).json()
 
-        tract_info = geo["result"]["geographies"]["Census Tracts"][0]
+        tract = geo["result"]["geographies"]["Census Tracts"][0]
 
-        state = tract_info["STATE"]
-        county = tract_info["COUNTY"]
-        tract = tract_info["TRACT"]
+        state = tract["STATE"]
+        county = tract["COUNTY"]
+        tract_code = tract["TRACT"]
 
         params = {
             "get": "B01003_001E,B19013_001E,B01002_001E",
-            "for": f"tract:{tract}",
+            "for": f"tract:{tract_code}",
             "in": f"state:{state} county:{county}"
         }
 
-        response = requests.get(CENSUS_API, params=params, timeout=20).json()
+        response = requests.get(CENSUS_API, params=params).json()
 
         data = response[1]
 
@@ -163,42 +163,45 @@ def get_market_data(lat, lng):
         }
 
 
-# ---------------- COMPETITOR LOGIC ----------------
+# ---------------- COMPETITOR TYPE LOGIC ----------------
 
-def miles_to_meters(miles):
-    return int(miles * 1609.34)
+SUPPORTED_TYPES = {
+    "cafe",
+    "restaurant",
+    "bakery",
+    "bar",
+    "gym",
+    "dentist",
+    "doctor",
+    "beauty_salon",
+    "hair_care",
+    "car_repair",
+    "lawyer",
+    "real_estate_agency",
+    "meal_takeaway",
+    "meal_delivery"
+}
 
 
-def infer_keyword(name, types):
+def detect_business_type(types):
 
-    name = name.lower()
-
-    if "pizza" in name:
-        return "pizza"
-
-    if "dentist" in types:
-        return "dentist"
-
-    if "plumber" in types:
-        return "plumber"
-
-    if "beauty_salon" in types:
-        return "salon"
-
-    if "gym" in types:
-        return "gym"
+    for t in types:
+        if t in SUPPORTED_TYPES:
+            return t
 
     return None
 
 
-def get_nearby(lat, lng, radius, keyword, client_place_id):
+# ---------------- GOOGLE NEARBY SEARCH ----------------
+
+def get_nearby(lat, lng, radius, place_type, client_place_id):
 
     url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
 
     params = {
         "location": f"{lat},{lng}",
         "radius": radius,
-        "keyword": keyword,
+        "type": place_type,
         "key": GOOGLE_API_KEY
     }
 
@@ -226,6 +229,9 @@ def get_nearby(lat, lng, radius, keyword, client_place_id):
         if place.get("place_id") == client_place_id:
             continue
 
+        if place.get("user_ratings_total", 0) < 5:
+            continue
+
         competitors.append({
             "name": place.get("name"),
             "rating": place.get("rating"),
@@ -247,45 +253,31 @@ def competitors(business_name: str, address: str):
     if not client:
         return {"error": "Business not found"}
 
-    keyword = infer_keyword(client["name"], client["types"])
+    business_type = detect_business_type(client["types"])
 
     market = get_market_data(client["lat"], client["lng"])
 
-    radius1 = get_nearby(client["lat"], client["lng"], miles_to_meters(1), keyword, client["place_id"])
-    radius3 = get_nearby(client["lat"], client["lng"], miles_to_meters(3), keyword, client["place_id"])
-    radius5 = get_nearby(client["lat"], client["lng"], miles_to_meters(5), keyword, client["place_id"])
-
+    radius1 = get_nearby(client["lat"], client["lng"], 1609, business_type, client["place_id"])
+    radius3 = get_nearby(client["lat"], client["lng"], 4828, business_type, client["place_id"])
+    radius5 = get_nearby(client["lat"], client["lng"], 8046, business_type, client["place_id"])
 
     db: Session = SessionLocal()
 
     analysis = AnalysisResult(
-    
-        user_id=1,  # temporary until we wire login tokens
-    
+        user_id=1,
         place_id=client["place_id"],
-    
         business_name=client["name"],
-    
         competitors_1_mile=len(radius1),
-    
         competitors_3_mile=len(radius3),
-    
         competitors_5_mile=len(radius5),
-    
         population=market.get("population"),
-    
         median_income=market.get("median_income"),
-    
         median_age=market.get("median_age")
-    
     )
-    
-    db.add(analysis)
-    
-    db.commit()
-    
-    db.close()
 
+    db.add(analysis)
+    db.commit()
+    db.close()
 
     summary = {
         "competitors_1_mile": len(radius1),
@@ -303,50 +295,42 @@ def competitors(business_name: str, address: str):
         },
         "market_data": market,
         "summary": summary,
-        "keyword_detected": keyword,
+        "business_type_detected": business_type,
         "radius_1_mile": radius1,
         "radius_3_mile": radius3,
         "radius_5_mile": radius5
     }
 
-# ---------------- ANALYSIS RESULTS ---------------
+
+# ---------------- ANALYSIS HISTORY ----------------
 
 @app.get("/analysis-history")
 def analysis_history():
 
     db: Session = SessionLocal()
 
-    try:
+    results = db.query(AnalysisResult).order_by(AnalysisResult.created_at.desc()).all()
 
-        results = (
-            db.query(AnalysisResult)
-            .order_by(AnalysisResult.created_at.desc())
-            .all()
-        )
+    data = []
 
-        data = []
+    for r in results:
 
-        for r in results:
+        data.append({
+            "business_name": r.business_name,
+            "competitors_1_mile": r.competitors_1_mile,
+            "competitors_3_mile": r.competitors_3_mile,
+            "competitors_5_mile": r.competitors_5_mile,
+            "population": r.population,
+            "median_income": r.median_income,
+            "median_age": r.median_age,
+            "created_at": r.created_at
+        })
 
-            data.append({
+    db.close()
 
-                "business_name": r.business_name,
-                "competitors_1_mile": r.competitors_1_mile,
-                "competitors_3_mile": r.competitors_3_mile,
-                "competitors_5_mile": r.competitors_5_mile,
-                "population": r.population,
-                "median_income": r.median_income,
-                "median_age": r.median_age,
-                "created_at": r.created_at
+    return data
 
-            })
 
-        return data
-
-    finally:
-
-        db.close()
-        
 # ---------------- MODELS ----------------
 
 class SignupRequest(BaseModel):
@@ -380,7 +364,7 @@ def signup(data: SignupRequest):
         client = get_client_info(data.business_name, data.address)
 
         if not client:
-            return {"error": "Business not found. Please use your exact Google Maps business name."}
+            return {"error": "Business not found"}
 
         new_user = User(
             email=email_clean,
@@ -411,14 +395,7 @@ def signup(data: SignupRequest):
             "place_id": client["place_id"]
         }
 
-    except Exception as e:
-
-        db.rollback()
-
-        raise HTTPException(status_code=500, detail=str(e))
-
     finally:
-
         db.close()
 
 
@@ -446,5 +423,4 @@ def login(data: LoginRequest):
         }
 
     finally:
-
         db.close()
