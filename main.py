@@ -23,7 +23,7 @@ import time
 from groq import Groq
 import json
 
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 import json
 
 
@@ -107,72 +107,53 @@ def root():
 
 def ai_competitor_agent(business_name, competitors):
     """
-    AI agent using DuckDuckGo Search + Groq Llama-3.
-    Includes:
-    - real web search
-    - error handling
-    - JSON cleaning
+    AI agent using DDGS for search and Groq (Llama 3.3) for analysis.
     """
-
-    # 1. Perform real web searches
     search_results = {}
 
+    # 1. Perform real web searches
     with DDGS() as ddgs:
         for comp in competitors:
             try:
-                query = f"{comp} pricing menu reviews promotions"
+                # Crafting a query for 2026 pricing and data
+                query = f"{comp} {business_name} pricing menu reviews promotions 2026"
                 results = ddgs.text(query, max_results=5)
-                search_results[comp] = results
+                search_results[comp] = list(results)
             except Exception as e:
                 search_results[comp] = [{"error": str(e)}]
 
-    # 2. Build prompt with REAL search results
+    # 2. Build prompt for Groq
     prompt = f"""
     You are a competitive intelligence analyst.
+    Business: {business_name}
+    Competitor Data: {json.dumps(search_results, indent=2)}
 
-    Business being analyzed:
-    {business_name}
-
-    Competitors:
-    {json.dumps(competitors, indent=2)}
-
-    Real web search results for each competitor:
-    {json.dumps(search_results, indent=2)}
-
-    Using ONLY the information above, extract:
-
-    - Pricing information
-    - Menu items
-    - Promotions
-    - Strengths
-    - Weaknesses
-    - Review sentiment
-    - Unique selling points
-
-    Return a clean JSON object with fields:
-    pricing, menu, promotions, strengths, weaknesses, sentiment, summary
+    Extract: pricing, menu items, promotions, strengths, weaknesses, sentiment, and USPs.
+    Return ONLY a clean JSON object. Do not include introductory text.
     """
 
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
     response = client.chat.completions.create(
-        model="llama3-8b",
+        model="llama-3.3-70b-versatile", 
         messages=[
-            {"role": "system", "content": "You extract competitive intelligence from real data only."},
+            {"role": "system", "content": "You are a competitive intelligence analyst. Output JSON only."},
             {"role": "user", "content": prompt}
-        ]
+        ],
+        response_format={"type": "json_object"} 
     )
 
-    # 3. Clean JSON before returning
+    # 3. Clean and return the content
     content = response.choices[0].message.content.strip()
-
+    
+    # Remove markdown formatting if the AI added it accidentally
     if "```json" in content:
         content = content.split("```json")[1].split("```")[0].strip()
     elif "```" in content:
         content = content.split("```")[1].split("```")[0].strip()
 
     return content
-
+    
 # ---------------- VALIDATE BUSINESS ----------------
 
 
@@ -592,44 +573,51 @@ def competitors(business_name: str, address: str):
 
 @app.get("/ai-competitor-intel")
 def ai_competitor_intel(business_name: str, address: str):
-
-    client = get_client_info(business_name, address)
-    if not client:
+    # 1. Get client info from Google Maps
+    client_info = get_client_info(business_name, address)
+    if not client_info:
         return {"error": "Business not found"}
 
-    business_type = detect_business_type(client["types"])
-    radius1 = get_nearby(client["lat"], client["lng"], 1609, business_type, client["place_id"])
-
+    # 2. Find nearby competitors
+    business_type = detect_business_type(client_info["types"])
+    radius1 = get_nearby(client_info["lat"], client_info["lng"], 1609, business_type, client_info["place_id"])
     competitor_names = [c["name"] for c in radius1][:5]
 
-    # Run AI agent
-    report_raw = ai_competitor_agent(client["name"], competitor_names)
+    # 3. Run the AI Agent
+    report_raw = ai_competitor_agent(client_info["name"], competitor_names)
 
-
-    # Save to DB
+    # 4. Parse the AI result (Fixed Indentation)
+    try:
+        report_json = json.loads(report_raw)
+    except Exception:
+        report_json = {"error": "AI returned invalid JSON", "raw": report_raw}
+        
+    # 5. Save results to the Database
     db: Session = SessionLocal()
-    analysis = AnalysisResult(
-        user_id=1,
-        place_id=client["place_id"],
-        business_name=client["name"],
-        competitors_1_mile=len(radius1),
-        competitors_3_mile=0,
-        competitors_5_mile=0,
-        population=None,
-        median_income=None,
-        median_age=None,
-        ai_competitor_report=json.dumps(report_json)
-    )
-    db.add(analysis)
-    db.commit()
-    db.close()
+    try:
+        analysis = AnalysisResult(
+            user_id=1,
+            place_id=client_info["place_id"],
+            business_name=client_info["name"],
+            competitors_1_mile=len(radius1),
+            competitors_3_mile=0,
+            competitors_5_mile=0,
+            population=None,
+            median_income=None,
+            median_age=None,
+            ai_competitor_report=json.dumps(report_json)
+        )
+        db.add(analysis)
+        db.commit()
+    finally:
+        db.close()
 
+    # 6. Return final results to the UI
     return {
-        "client": client["name"],
-        "competitors": competitor_names,
+        "client": client_info["name"],
+        "competitors_searched": competitor_names,
         "ai_report": report_json
     }
-
 # ---------------- ANALYSIS HISTORY ----------------
 
 
