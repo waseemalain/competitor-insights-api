@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text
 from sqlalchemy.sql import func
 from database import Base
 
@@ -50,3 +50,6 @@ class AnalysisResult(Base):
     median_age = Column(String)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    ai_competitor_report = Column(Text, nullable=True)
+
