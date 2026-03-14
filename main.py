@@ -24,7 +24,6 @@ from groq import Groq
 import json
 
 from duckduckgo_search import DDGS
-import subprocess
 import json
 
 
@@ -108,27 +107,40 @@ def root():
 
 def ai_competitor_agent(business_name, competitors):
     """
-    AI agent using Groq Llama-3 (free).
+    AI agent using DuckDuckGo Search + Groq Llama-3.
+    Includes:
+    - real web search
+    - error handling
+    - JSON cleaning
     """
 
-    # Build search queries
-    search_queries = []
-    for comp in competitors:
-        search_queries.append(f"{comp} pricing menu reviews promotions")
+    # 1. Perform real web searches
+    search_results = {}
 
-    # Build prompt
+    with DDGS() as ddgs:
+        for comp in competitors:
+            try:
+                query = f"{comp} pricing menu reviews promotions"
+                results = ddgs.text(query, max_results=5)
+                search_results[comp] = results
+            except Exception as e:
+                search_results[comp] = [{"error": str(e)}]
+
+    # 2. Build prompt with REAL search results
     prompt = f"""
     You are a competitive intelligence analyst.
 
-    Business: {business_name}
+    Business being analyzed:
+    {business_name}
 
     Competitors:
     {json.dumps(competitors, indent=2)}
 
-    Search queries to consider:
-    {json.dumps(search_queries, indent=2)}
+    Real web search results for each competitor:
+    {json.dumps(search_results, indent=2)}
 
-    Extract:
+    Using ONLY the information above, extract:
+
     - Pricing information
     - Menu items
     - Promotions
@@ -146,13 +158,20 @@ def ai_competitor_agent(business_name, competitors):
     response = client.chat.completions.create(
         model="llama3-8b-8192",
         messages=[
-            {"role": "system", "content": "You extract competitive intelligence."},
+            {"role": "system", "content": "You extract competitive intelligence from real data only."},
             {"role": "user", "content": prompt}
         ]
     )
 
-    return response.choices[0].message.content
+    # 3. Clean JSON before returning
+    content = response.choices[0].message.content.strip()
 
+    if "```json" in content:
+        content = content.split("```json")[1].split("```")[0].strip()
+    elif "```" in content:
+        content = content.split("```")[1].split("```")[0].strip()
+
+    return content
 
 # ---------------- VALIDATE BUSINESS ----------------
 
@@ -586,10 +605,6 @@ def ai_competitor_intel(business_name: str, address: str):
     # Run AI agent
     report_raw = ai_competitor_agent(client["name"], competitor_names)
 
-    try:
-        report_json = json.loads(report_raw)
-    except:
-        report_json = {"raw": report_raw}
 
     # Save to DB
     db: Session = SessionLocal()
