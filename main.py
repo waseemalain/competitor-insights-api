@@ -267,68 +267,33 @@ def get_client_info(business_name, address):
 
 
 def get_market_data(lat, lng):
-
-
     try:
-
-
+        # 1. Get Geography IDs from Coordinates
         geo_url = f"https://geocoding.geo.census.gov/geocoder/geographies/coordinates?x={lng}&y={lat}&benchmark=Public_AR_Current&vintage=Current_Current&format=json"
+        geo_res = requests.get(geo_url, timeout=10)
+        geo_data = geo_res.json()
 
+        # Extract specific IDs needed for the data API
+        tract_info = geo_data["result"]["geographies"]["Census Tracts"][0]
+        state = tract_info["STATE"]
+        county = tract_info["COUNTY"]
+        tract = tract_info["TRACT"]
 
-        geo = requests.get(geo_url).json()
-
-
-        tract = geo["result"]["geographies"]["Census Tracts"][0]
-
-
-        state = tract["STATE"]
-
-        county = tract["COUNTY"]
-
-        tract_code = tract["TRACT"]
-
-
-        params = {
-
-            "get": "B01003_001E,B19013_001E,B01002_001E",
-
-            "for": f"tract:{tract_code}",
-
-            "in": f"state:{state} county:{county}"
-
-        }
-
-
-        response = requests.get(CENSUS_API, params=params).json()
-
-
-        data = response[1]
-
+        # 2. Get Actual Data (B01003=Pop, B19013=Income, B01002=Age)
+        data_url = f"https://api.census.gov/data/2022/acs/acs5?get=B01003_001E,B19013_001E,B01002_001E&for=tract:{tract}&in=state:{state}%20county:{county}"
+        data_res = requests.get(data_url, timeout=10)
+        
+        # Census returns a list of lists: [["header"], ["values"]]
+        stats = data_res.json()[1] 
 
         return {
-
-            "population": int(data[0]),
-
-            "median_income": int(data[1]),
-
-            "median_age": float(data[2])
-
+            "population": int(stats[0]) if stats[0] else 0,
+            "median_income": int(stats[1]) if stats[1] else 0,
+            "median_age": float(stats[2]) if stats[2] else 0.0
         }
-
-
-    except Exception:
-
-
-        return {
-
-            "population": None,
-
-            "median_income": None,
-
-            "median_age": None
-
-        }
-
+    except Exception as e:
+        print(f"Census Error: {e}")
+        return {"population": 0, "median_income": 0, "median_age": 0.0}
 
 
 # ---------------- COMPETITOR TYPE LOGIC ----------------
@@ -573,43 +538,42 @@ def competitors(business_name: str, address: str):
 
 @app.get("/ai-competitor-intel")
 def ai_competitor_intel(business_name: str, address: str):
-    client_info = get_client_info(business_name, address)
-    if not client_info:
+    client = get_client_info(business_name, address)
+    if not client:
         return {"error": "Business not found"}
 
-    business_type = detect_business_type(client_info["types"])
+    business_type = detect_business_type(client["types"])
     
-    # 1. Increased radius to 3 miles (4828 meters)
-    radius_search = get_nearby(client_info["lat"], client_info["lng"], 4828, business_type, client_info["place_id"])
+    # Calculate all three radii
+    radius1 = get_nearby(client["lat"], client["lng"], 1609, business_type, client["place_id"])
+    radius3 = get_nearby(client["lat"], client["lng"], 4828, business_type, client["place_id"])
+    radius5 = get_nearby(client["lat"], client["lng"], 8046, business_type, client["place_id"])
+
+    # Fetch the missing Census data
+    market = get_market_data(client["lat"], client["lng"])
+
+    # Run AI agent (using the 3-mile radius for better context)
+    comp_names = [c["name"] for c in radius3][:5]
+    report_raw = ai_competitor_agent(client["name"], comp_names)
     
-    # 2. Fallback logic so the AI always has a target to search for
-    if not radius_search:
-        competitor_names = [f"top {business_type}s in {address}"]
-    else:
-        competitor_names = [c["name"] for c in radius_search][:5]
-
-    # 3. Run the AI Agent
-    report_raw = ai_competitor_agent(client_info["name"], competitor_names)
-
-    # 4. Parse the AI result
     try:
         report_json = json.loads(report_raw)
-    except Exception:
-        report_json = {"error": "AI returned invalid JSON", "raw": report_raw}
-        
-    # 5. Save results to the Database
+    except:
+        report_json = {"raw": report_raw}
+
+    # Save to DB with ALL fields filled
     db: Session = SessionLocal()
     try:
         analysis = AnalysisResult(
             user_id=1,
-            place_id=client_info["place_id"],
-            business_name=client_info["name"],
-            competitors_1_mile=len(radius_search), # FIXED: Changed radius1 to radius_search
-            competitors_3_mile=0,
-            competitors_5_mile=0,
-            population=None,
-            median_income=None,
-            median_age=None,
+            place_id=client["place_id"],
+            business_name=client["name"],
+            competitors_1_mile=len(radius1),
+            competitors_3_mile=len(radius3),
+            competitors_5_mile=len(radius5),
+            population=market["population"],
+            median_income=market["median_income"],
+            median_age=market["median_age"],
             ai_competitor_report=json.dumps(report_json)
         )
         db.add(analysis)
@@ -617,12 +581,12 @@ def ai_competitor_intel(business_name: str, address: str):
     finally:
         db.close()
 
-    # 6. Return final results to the UI
     return {
-        "client": client_info["name"],
-        "competitors_searched": competitor_names,
+        "client": client["name"],
+        "market": market,
         "ai_report": report_json
     }
+    
 # ---------------- ANALYSIS HISTORY ----------------
 
 
