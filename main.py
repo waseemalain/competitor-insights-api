@@ -538,42 +538,43 @@ def competitors(business_name: str, address: str):
 
 @app.get("/ai-competitor-intel")
 def ai_competitor_intel(business_name: str, address: str):
-    client = get_client_info(business_name, address)
-    if not client:
+    # 1. Dynamically get info for WHATEVER business/address you typed
+    client_info = get_client_info(business_name, address)
+    if not client_info:
         return {"error": "Business not found"}
 
-    business_type = detect_business_type(client["types"])
+    business_type = detect_business_type(client_info["types"])
     
-    # Calculate all three radii
-    radius1 = get_nearby(client["lat"], client["lng"], 1609, business_type, client["place_id"])
-    radius3 = get_nearby(client["lat"], client["lng"], 4828, business_type, client["place_id"])
-    radius5 = get_nearby(client["lat"], client["lng"], 8046, business_type, client["place_id"])
+    # 2. UNIVERSAL RADIUS: These now run every time for every business
+    radius1 = get_nearby(client_info["lat"], client_info["lng"], 1609, business_type, client_info["place_id"])
+    radius3 = get_nearby(client_info["lat"], client_info["lng"], 4828, business_type, client_info["place_id"])
+    radius5 = get_nearby(client_info["lat"], client_info["lng"], 8046, business_type, client_info["place_id"])
 
-    # Fetch the missing Census data
-    market = get_market_data(client["lat"], client["lng"])
+    # 3. UNIVERSAL MARKET DATA: Uses the specific lat/lng of the chosen business
+    market = get_market_data(client_info["lat"], client_info["lng"])
 
-    # Run AI agent (using the 3-mile radius for better context)
+    # 4. AI AGENT: Analyzes the competitors found above
     comp_names = [c["name"] for c in radius3][:5]
-    report_raw = ai_competitor_agent(client["name"], comp_names)
+    report_raw = ai_competitor_agent(client_info["name"], comp_names)
     
     try:
         report_json = json.loads(report_raw)
     except:
-        report_json = {"raw": report_raw}
-
-    # Save to DB with ALL fields filled
+        report_json = {"error": "AI response format error", "raw": report_raw}
+        
+    # 5. DATABASE SAVE: This fills the columns that were previously empty (0)
     db: Session = SessionLocal()
     try:
         analysis = AnalysisResult(
             user_id=1,
-            place_id=client["place_id"],
-            business_name=client["name"],
+            place_id=client_info["place_id"],
+            business_name=client_info["name"],
             competitors_1_mile=len(radius1),
             competitors_3_mile=len(radius3),
             competitors_5_mile=len(radius5),
-            population=market["population"],
-            median_income=market["median_income"],
-            median_age=market["median_age"],
+            population=market.get("population", 0),
+            median_income=market.get("median_income", 0),
+            median_age=market.get("median_age", 0),
             ai_competitor_report=json.dumps(report_json)
         )
         db.add(analysis)
@@ -582,11 +583,10 @@ def ai_competitor_intel(business_name: str, address: str):
         db.close()
 
     return {
-        "client": client["name"],
-        "market": market,
+        "client": client_info["name"],
+        "market_stats": market,
         "ai_report": report_json
-    }
-    
+    }    
 # ---------------- ANALYSIS HISTORY ----------------
 
 
