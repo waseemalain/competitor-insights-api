@@ -573,20 +573,25 @@ def competitors(business_name: str, address: str):
 
 @app.get("/ai-competitor-intel")
 def ai_competitor_intel(business_name: str, address: str):
-    # 1. Get client info from Google Maps
     client_info = get_client_info(business_name, address)
     if not client_info:
         return {"error": "Business not found"}
 
-    # 2. Find nearby competitors
     business_type = detect_business_type(client_info["types"])
-    radius1 = get_nearby(client_info["lat"], client_info["lng"], 1609, business_type, client_info["place_id"])
-    competitor_names = [c["name"] for c in radius1][:5]
+    
+    # 1. Increased radius to 3 miles (4828 meters)
+    radius_search = get_nearby(client_info["lat"], client_info["lng"], 4828, business_type, client_info["place_id"])
+    
+    # 2. Fallback logic so the AI always has a target to search for
+    if not radius_search:
+        competitor_names = [f"top {business_type}s in {address}"]
+    else:
+        competitor_names = [c["name"] for c in radius_search][:5]
 
     # 3. Run the AI Agent
     report_raw = ai_competitor_agent(client_info["name"], competitor_names)
 
-    # 4. Parse the AI result (Fixed Indentation)
+    # 4. Parse the AI result
     try:
         report_json = json.loads(report_raw)
     except Exception:
@@ -599,7 +604,7 @@ def ai_competitor_intel(business_name: str, address: str):
             user_id=1,
             place_id=client_info["place_id"],
             business_name=client_info["name"],
-            competitors_1_mile=len(radius1),
+            competitors_1_mile=len(radius_search), # FIXED: Changed radius1 to radius_search
             competitors_3_mile=0,
             competitors_5_mile=0,
             population=None,
