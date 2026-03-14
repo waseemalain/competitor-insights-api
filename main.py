@@ -20,6 +20,14 @@ import os
 
 import time
 
+from groq import Groq
+import json
+
+from duckduckgo_search import DDGS
+import subprocess
+import json
+
+
 
 app = FastAPI()
 
@@ -96,6 +104,54 @@ def root():
 
     return {"status": "Pali Analytics API running"}
 
+#-------------------------------------------------
+
+def ai_competitor_agent(business_name, competitors):
+    """
+    AI agent using Groq Llama-3 (free).
+    """
+
+    # Build search queries
+    search_queries = []
+    for comp in competitors:
+        search_queries.append(f"{comp} pricing menu reviews promotions")
+
+    # Build prompt
+    prompt = f"""
+    You are a competitive intelligence analyst.
+
+    Business: {business_name}
+
+    Competitors:
+    {json.dumps(competitors, indent=2)}
+
+    Search queries to consider:
+    {json.dumps(search_queries, indent=2)}
+
+    Extract:
+    - Pricing information
+    - Menu items
+    - Promotions
+    - Strengths
+    - Weaknesses
+    - Review sentiment
+    - Unique selling points
+
+    Return a clean JSON object with fields:
+    pricing, menu, promotions, strengths, weaknesses, sentiment, summary
+    """
+
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+    response = client.chat.completions.create(
+        model="llama3-8b-8192",
+        messages=[
+            {"role": "system", "content": "You extract competitive intelligence."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    return response.choices[0].message.content
 
 
 # ---------------- VALIDATE BUSINESS ----------------
@@ -205,7 +261,6 @@ def get_client_info(business_name, address):
         "reviews": result.get("user_ratings_total")
 
     }
-
 
 
 # ---------------- MARKET DATA ----------------
@@ -514,7 +569,51 @@ def competitors(business_name: str, address: str):
 
     }
 
+# ---------------------------------------------------
 
+@app.get("/ai-competitor-intel")
+def ai_competitor_intel(business_name: str, address: str):
+
+    client = get_client_info(business_name, address)
+    if not client:
+        return {"error": "Business not found"}
+
+    business_type = detect_business_type(client["types"])
+    radius1 = get_nearby(client["lat"], client["lng"], 1609, business_type, client["place_id"])
+
+    competitor_names = [c["name"] for c in radius1][:5]
+
+    # Run AI agent
+    report_raw = ai_competitor_agent(client["name"], competitor_names)
+
+    try:
+        report_json = json.loads(report_raw)
+    except:
+        report_json = {"raw": report_raw}
+
+    # Save to DB
+    db: Session = SessionLocal()
+    analysis = AnalysisResult(
+        user_id=1,
+        place_id=client["place_id"],
+        business_name=client["name"],
+        competitors_1_mile=len(radius1),
+        competitors_3_mile=0,
+        competitors_5_mile=0,
+        population=None,
+        median_income=None,
+        median_age=None,
+        ai_competitor_report=json.dumps(report_json)
+    )
+    db.add(analysis)
+    db.commit()
+    db.close()
+
+    return {
+        "client": client["name"],
+        "competitors": competitor_names,
+        "ai_report": report_json
+    }
 
 # ---------------- ANALYSIS HISTORY ----------------
 
