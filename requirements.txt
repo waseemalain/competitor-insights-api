@@ -1,12 +1,9 @@
 fastapi
 uvicorn
-requests
-psycopg2-binary
-sqlalchemy
-passlib[bcrypt]
-bcrypt==4.0.1
-python-jose[cryptography]
-
-# NEW dependencies for AI agent
 groq
-duckduckgo-search
+ddgs
+sqlalchemy
+psycopg2-binary
+python-jose[cryptography]
+passlib[bcrypt]
+requests
