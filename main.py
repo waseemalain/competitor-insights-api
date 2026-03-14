@@ -156,7 +156,7 @@ def ai_competitor_agent(business_name, competitors):
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
     response = client.chat.completions.create(
-        model="llama3-8b-8192",
+        model="llama3-8b",
         messages=[
             {"role": "system", "content": "You extract competitive intelligence from real data only."},
             {"role": "user", "content": prompt}
