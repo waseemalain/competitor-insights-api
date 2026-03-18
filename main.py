@@ -27,6 +27,21 @@ from ddgs import DDGS
 import json
 
 
+# ---------------- MODELS (DEFINED FIRST) ----------------
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+    business_name: str
+    address: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class CompetitorTypeRequest(BaseModel):
+    category: str
+    subcategories: list[str]
+
 
 app = FastAPI()
 
@@ -121,19 +136,19 @@ def ai_competitor_agent(business_name, competitors):
 
             try:
                 # Local business info (address, phone, hours, categories)
-                comp_data["local"] = list(ddgs.local(f"{comp} {business_name}", max_results=5))
+                comp_data["local"] = list(ddgs.local(f"{comp} near {business_name}", max_results=5))
             except Exception as e:
                 comp_data["local"] = [{"error": str(e)}]
 
             try:
                 # Maps data (coordinates, categories, popularity)
-                comp_data["maps"] = list(ddgs.maps(f"{comp} {business_name}", max_results=5))
+                comp_data["maps"] = list(ddgs.maps(f"{comp} near {business_name}", max_results=5))
             except Exception as e:
                 comp_data["maps"] = [{"error": str(e)}]
 
             try:
                 # Reviews (actual review text)
-                comp_data["reviews"] = list(ddgs.reviews(f"{comp} {business_name}", max_results=10))
+                comp_data["reviews"] = list(ddgs.reviews(f"{comp} near {business_name}", max_results=10))
             except Exception as e:
                 comp_data["reviews"] = [{"error": str(e)}]
 
@@ -429,12 +444,16 @@ def get_nearby(lat, lng, radius, place_types, client_place_id):
 
 
 @app.post("/competitors")
-def competitors(data: CompetitorTypeRequest, business_name: str = "", address: str = ""):
+def competitors(
+    business_name: str,
+    address: str,
+    types: CompetitorTypeRequest
+):
     client = get_client_info(business_name, address)
     if not client:
         return {"error": "Business not found"}
 
-    selected_types = data.subcategories
+    selected_types = types.subcategories
 
     market = get_market_data(client["lat"], client["lng"])
 
@@ -474,8 +493,7 @@ def competitors(data: CompetitorTypeRequest, business_name: str = "", address: s
         "radius_1_mile": radius1,
         "radius_3_mile": radius3,
         "radius_5_mile": radius5
-    }
-    
+    }    
 # --------------AI-COMPETITOR-INTEL ENDPOINT-------
 
 @app.post("/ai-competitor-intel")
@@ -585,27 +603,6 @@ def analysis_history():
 
 
     return data
-
-
-
-# ---------------- MODELS ----------------
-
-
-# ---------------- MODELS ----------------
-
-class SignupRequest(BaseModel):
-    email: str
-    password: str
-    business_name: str
-    address: str
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-class CompetitorTypeRequest(BaseModel):
-    category: str
-    subcategories: list[str]  # user must select 1–3 subcategories
 
 
 
