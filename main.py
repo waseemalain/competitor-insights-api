@@ -538,31 +538,32 @@ def competitors(business_name: str, address: str):
 
 @app.get("/ai-competitor-intel")
 def ai_competitor_intel(business_name: str, address: str):
-    # 1. Dynamically get info for WHATEVER business/address you typed
+    # 1. Get the target business coordinates
     client_info = get_client_info(business_name, address)
     if not client_info:
         return {"error": "Business not found"}
 
     business_type = detect_business_type(client_info["types"])
     
-    # 2. UNIVERSAL RADIUS: These now run every time for every business
+    # 2. Perform 3 separate searches for the specific mile radiuses
+    # 1609m = 1 mile | 4828m = 3 miles | 8046m = 5 miles
     radius1 = get_nearby(client_info["lat"], client_info["lng"], 1609, business_type, client_info["place_id"])
     radius3 = get_nearby(client_info["lat"], client_info["lng"], 4828, business_type, client_info["place_id"])
     radius5 = get_nearby(client_info["lat"], client_info["lng"], 8046, business_type, client_info["place_id"])
 
-    # 3. UNIVERSAL MARKET DATA: Uses the specific lat/lng of the chosen business
+    # 3. Get the market data (Population/Income) for this location
     market = get_market_data(client_info["lat"], client_info["lng"])
 
-    # 4. AI AGENT: Analyzes the competitors found above
+    # 4. Use the 3-mile list for the AI deep-dive (best for local context)
     comp_names = [c["name"] for c in radius3][:5]
     report_raw = ai_competitor_agent(client_info["name"], comp_names)
     
     try:
         report_json = json.loads(report_raw)
     except:
-        report_json = {"error": "AI response format error", "raw": report_raw}
+        report_json = {"error": "AI response error", "raw": report_raw}
         
-    # 5. DATABASE SAVE: This fills the columns that were previously empty (0)
+    # 5. Save the complete report to your History
     db: Session = SessionLocal()
     try:
         analysis = AnalysisResult(
@@ -584,10 +585,14 @@ def ai_competitor_intel(business_name: str, address: str):
 
     return {
         "client": client_info["name"],
-        "market_stats": market,
+        "counts": {
+            "1_mile": len(radius1),
+            "3_mile": len(radius3),
+            "5_mile": len(radius5)
+        },
+        "market": market,
         "ai_report": report_json
-    }    
-# ---------------- ANALYSIS HISTORY ----------------
+    }# ---------------- ANALYSIS HISTORY ----------------
 
 
 @app.get("/analysis-history")
