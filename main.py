@@ -107,22 +107,39 @@ def root():
 
 def ai_competitor_agent(business_name, competitors):
     """
-    AI agent using DDGS for search and Groq (Llama 3.3) for analysis.
+    AI agent using DDGS Local, Maps, Reviews + Groq (Llama 3.3) for analysis.
     """
     search_results = {}
 
-    # 1. Perform web searches for each competitor
     with DDGS() as ddgs:
         for comp in competitors:
-            try:
-                # Focus on menu, pricing, reviews, and sentiment
-                query = f"{comp} {business_name} coffee menu pricing reviews"
-                results = ddgs.text(query, max_results=8)
-                search_results[comp] = list(results)
-            except Exception as e:
-                search_results[comp] = [{"error": str(e)}]
+            comp_data = {
+                "local": [],
+                "maps": [],
+                "reviews": []
+            }
 
-    # 2. Build prompt for Groq (extraction + analysis)
+            try:
+                # Local business info (address, phone, hours, categories)
+                comp_data["local"] = list(ddgs.local(f"{comp} {business_name}", max_results=5))
+            except Exception as e:
+                comp_data["local"] = [{"error": str(e)}]
+
+            try:
+                # Maps data (coordinates, categories, popularity)
+                comp_data["maps"] = list(ddgs.maps(f"{comp} {business_name}", max_results=5))
+            except Exception as e:
+                comp_data["maps"] = [{"error": str(e)}]
+
+            try:
+                # Reviews (actual review text)
+                comp_data["reviews"] = list(ddgs.reviews(f"{comp} {business_name}", max_results=10))
+            except Exception as e:
+                comp_data["reviews"] = [{"error": str(e)}]
+
+            search_results[comp] = comp_data
+
+    # Build prompt for Groq (extraction + analysis)
     prompt = f"""
 You are a senior competitive intelligence analyst for local brick-and-mortar businesses.
 
@@ -141,7 +158,7 @@ You must return JSON in the EXACT schema below:
 {{
   "client": {{
     "summary": "",
-    "pricing": {{}},
+    "pricing": {{ }},
     "menu": [],
     "sentiment": {{
       "positive": [],
@@ -155,7 +172,7 @@ You must return JSON in the EXACT schema below:
   "competitors": [
     {{
       "name": "",
-      "pricing": {{}},
+      "pricing": {{ }},
       "menu": [],
       "sentiment": {{
         "positive": [],
@@ -181,25 +198,6 @@ You must return JSON in the EXACT schema below:
   }}
 }}
 
-Field rules:
-- "pricing": use a dict like {{"low": "...", "high": "...", "typical_ticket": "..."}} when possible.
-- "menu": list of key items or categories (e.g. "Turkish coffee", "baklava", "cold brew", "sandwiches").
-- "sentiment.positive"/"sentiment.negative": short bullet-style phrases from reviews.
-- "sentiment.themes": patterns like "great service", "slow wait times", "cozy atmosphere".
-- "strengths"/"weaknesses"/"usps": short, concrete phrases.
-
-2) ANALYSIS (BUSINESS-READY INSIGHTS)
-Using ONLY the extracted data (no hallucinations), fill the "analysis" section:
-
-- "pricing_comparison": compare client vs competitors (who is cheaper, similar, more premium).
-- "menu_overlap": where the client offers similar items vs where they are unique.
-- "sentiment_comparison": how reviews differ (service, quality, atmosphere, value).
-- "swot.strengths": what the client does well vs competitors.
-- "swot.weaknesses": where the client is behind.
-- "swot.opportunities": gaps in the market, unmet needs, niches.
-- "swot.threats": strong competitors, pricing pressure, saturation.
-- "recommendations": 5–10 specific, actionable moves the client could take (pricing, menu, promotions, experience).
-
 Rules:
 - Use ONLY information from the search results.
 - Do NOT invent or assume anything.
@@ -220,14 +218,12 @@ Rules:
 
     content = response.choices[0].message.content.strip()
 
-    # Safety: strip markdown fences if they appear
     if "```json" in content:
         content = content.split("```json")[1].split("```")[0].strip()
     elif "```" in content:
         content = content.split("```")[1].split("```")[0].strip()
 
     return content
-
 
 # ---------------- CLIENT INFO ----------------
 
@@ -313,133 +309,117 @@ def get_market_data(lat, lng):
 # ---------------- COMPETITOR TYPE LOGIC ----------------
 
 
+# ---------------- COMPETITOR TYPE LOGIC ----------------
+
 SUPPORTED_TYPES = {
-
     "cafe",
-
     "restaurant",
-
     "bakery",
-
     "bar",
-
     "gym",
-
     "dentist",
-
     "doctor",
-
     "beauty_salon",
-
     "hair_care",
-
     "car_repair",
-
     "lawyer",
-
     "real_estate_agency",
-
     "meal_takeaway",
-
     "meal_delivery"
-
 }
 
-
+# NEW: Google Place Types (Table A subset for Food & Drink)
+GOOGLE_PLACE_TYPES = {
+    "food-and-drink": {
+        "coffee": [
+            "cafe",
+            "coffee_shop",
+            "coffee_stand",
+            "coffee_roastery",
+            "tea_house",
+            "dessert_shop",
+            "bakery",
+            "bagel_shop",
+            "donut_shop",
+            "cake_shop",
+            "pastry_shop"
+        ],
+        "restaurants": [
+            "restaurant",
+            "fast_food_restaurant",
+            "breakfast_restaurant",
+            "brunch_restaurant",
+            "diner",
+            "sandwich_shop",
+            "pizza_restaurant",
+            "salad_shop"
+        ],
+        "ethnic": [
+            "middle_eastern_restaurant",
+            "turkish_restaurant",
+            "greek_restaurant",
+            "mediterranean_restaurant",
+            "lebanese_restaurant"
+        ]
+    }
+}
 
 def detect_business_type(types):
-
-
     for t in types:
-
         if t in SUPPORTED_TYPES:
-
             return t
-
-
     return None
-
-
 
 # ---------------- GOOGLE NEARBY SEARCH ----------------
 
 
-def get_nearby(lat, lng, radius, place_type, client_place_id):
-
+def get_nearby(lat, lng, radius, place_types, client_place_id):
 
     url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
 
-
     params = {
-
         "location": f"{lat},{lng}",
-
         "radius": radius,
-
-        "type": place_type,
-
+        "type": "|".join(place_types),  # allow multiple types
         "key": GOOGLE_API_KEY
-
     }
 
-
     response = requests.get(url, params=params).json()
-
-
     results = response.get("results", [])
 
-
     while "next_page_token" in response:
-
-
         time.sleep(2)
-
-
         params = {
-
             "pagetoken": response["next_page_token"],
-
             "key": GOOGLE_API_KEY
-
         }
-
-
         response = requests.get(url, params=params).json()
-
-
         results.extend(response.get("results", []))
-
 
     competitors = []
 
-
     for place in results:
 
-
         if place.get("place_id") == client_place_id:
-
             continue
-
 
         if place.get("user_ratings_total", 0) < 5:
-
             continue
 
+        place_types_found = place.get("types", [])
+
+        # Filter: only include places matching selected types
+        if not any(t in place_types_found for t in place_types):
+            continue
 
         competitors.append({
-
             "name": place.get("name"),
-
             "rating": place.get("rating"),
-
             "reviews": place.get("user_ratings_total"),
-
             "address": place.get("vicinity"),
-
-            "place_id": place.get("place_id")
-
+            "place_id": place.get("place_id"),
+            "types": place_types_found
         })
-
 
     return competitors
 
@@ -448,136 +428,93 @@ def get_nearby(lat, lng, radius, place_type, client_place_id):
 # ---------------- COMPETITOR ENDPOINT ----------------
 
 
-@app.get("/competitors")
-
-def competitors(business_name: str, address: str):
-
-
+@app.post("/competitors")
+def competitors(
+    business_name: str,
+    address: str,
+    types: CompetitorTypeRequest
+):
     client = get_client_info(business_name, address)
-
-
     if not client:
-
         return {"error": "Business not found"}
 
-
-    business_type = detect_business_type(client["types"])
-
+    # Use user-selected competitor types
+    selected_types = types.subcategories
 
     market = get_market_data(client["lat"], client["lng"])
 
-
-    radius1 = get_nearby(client["lat"], client["lng"], 1609, business_type, client["place_id"])
-
-    radius3 = get_nearby(client["lat"], client["lng"], 4828, business_type, client["place_id"])
-
-    radius5 = get_nearby(client["lat"], client["lng"], 8046, business_type, client["place_id"])
-
+    radius1 = get_nearby(client["lat"], client["lng"], 1609, selected_types, client["place_id"])
+    radius3 = get_nearby(client["lat"], client["lng"], 4828, selected_types, client["place_id"])
+    radius5 = get_nearby(client["lat"], client["lng"], 8046, selected_types, client["place_id"])
 
     db: Session = SessionLocal()
-
-
     analysis = AnalysisResult(
-
         user_id=1,
-
         place_id=client["place_id"],
-
         business_name=client["name"],
-
         competitors_1_mile=len(radius1),
-
         competitors_3_mile=len(radius3),
-
         competitors_5_mile=len(radius5),
-
         population=market.get("population"),
-
         median_income=market.get("median_income"),
-
         median_age=market.get("median_age")
-
     )
-
-
     db.add(analysis)
-
     db.commit()
-
     db.close()
 
-
-    summary = {
-
-        "competitors_1_mile": len(radius1),
-
-        "competitors_3_mile": len(radius3),
-
-        "competitors_5_mile": len(radius5),
-
-        "client_rating": client["rating"],
-
-        "client_reviews": client["reviews"]
-
-    }
-
-
     return {
-
         "client": {
-
             "name": client["name"],
-
             "rating": client["rating"],
-
             "reviews": client["reviews"]
-
         },
-
         "market_data": market,
-
-        "summary": summary,
-
-        "business_type_detected": business_type,
-
+        "summary": {
+            "competitors_1_mile": len(radius1),
+            "competitors_3_mile": len(radius3),
+            "competitors_5_mile": len(radius5)
+        },
+        "selected_types": selected_types,
         "radius_1_mile": radius1,
-
         "radius_3_mile": radius3,
-
         "radius_5_mile": radius5
-
     }
 
-# ---------------------------------------------------
+# --------------AI-COMPETITOR-INTEL ENDPOINT-------
 
-@app.get("/ai-competitor-intel")
-def ai_competitor_intel(business_name: str, address: str):
+@app.post("/ai-competitor-intel")
+def ai_competitor_intel(
+    business_name: str,
+    address: str,
+    types: CompetitorTypeRequest
+):
     # 1. Get the target business coordinates
     client_info = get_client_info(business_name, address)
     if not client_info:
         return {"error": "Business not found"}
 
-    business_type = detect_business_type(client_info["types"])
-    
-    # 2. Perform 3 separate searches for the specific mile radiuses
-    # 1609m = 1 mile | 4828m = 3 miles | 8046m = 5 miles
-    radius1 = get_nearby(client_info["lat"], client_info["lng"], 1609, business_type, client_info["place_id"])
-    radius3 = get_nearby(client_info["lat"], client_info["lng"], 4828, business_type, client_info["place_id"])
-    radius5 = get_nearby(client_info["lat"], client_info["lng"], 8046, business_type, client_info["place_id"])
+    # 2. Use user-selected competitor types
+    selected_types = types.subcategories
 
-    # 3. Get the market data (Population/Income) for this location
+    # 3. Perform 3 separate searches
+    radius1 = get_nearby(client_info["lat"], client_info["lng"], 1609, selected_types, client_info["place_id"])
+    radius3 = get_nearby(client_info["lat"], client_info["lng"], 4828, selected_types, client_info["place_id"])
+    radius5 = get_nearby(client_info["lat"], client_info["lng"], 8046, selected_types, client_info["place_id"])
+
+    # 4. Market data
     market = get_market_data(client_info["lat"], client_info["lng"])
 
-    # 4. Use the 3-mile list for the AI deep-dive (best for local context)
+    # 5. Use 3-mile competitors for AI deep dive
     comp_names = [c["name"] for c in radius3][:5]
     report_raw = ai_competitor_agent(client_info["name"], comp_names)
-    
+
     try:
         report_json = json.loads(report_raw)
     except:
         report_json = {"error": "AI response error", "raw": report_raw}
-        
-    # 5. Save the complete report to your History
+
+    # 6. Save to DB
     db: Session = SessionLocal()
     try:
         analysis = AnalysisResult(
@@ -607,7 +544,7 @@ def ai_competitor_intel(business_name: str, address: str):
         "market": market,
         "ai_report": report_json
     }
-    
+
 # ---------------- ANALYSIS HISTORY ----------------
 
 
@@ -659,23 +596,21 @@ def analysis_history():
 # ---------------- MODELS ----------------
 
 
+# ---------------- MODELS ----------------
+
 class SignupRequest(BaseModel):
-
     email: str
-
     password: str
-
     business_name: str
-
     address: str
 
-
-
 class LoginRequest(BaseModel):
-
     email: str
-
     password: str
+
+class CompetitorTypeRequest(BaseModel):
+    category: str
+    subcategories: list[str]  # user must select 1–3 subcategories
 
 
 
