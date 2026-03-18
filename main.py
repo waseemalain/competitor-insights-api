@@ -115,45 +115,78 @@ def ai_competitor_agent(business_name, competitors):
     with DDGS() as ddgs:
         for comp in competitors:
             try:
-                # Crafting a query for 2026 pricing and data
                 query = f"{comp} {business_name} pricing menu reviews promotions 2026"
                 results = ddgs.text(query, max_results=5)
                 search_results[comp] = list(results)
             except Exception as e:
                 search_results[comp] = [{"error": str(e)}]
 
-    # 2. Build prompt for Groq
+    # 2. Build prompt for Groq (STRICT SCHEMA)
     prompt = f"""
-    You are a competitive intelligence analyst.
-    Business: {business_name}
-    Competitor Data: {json.dumps(search_results, indent=2)}
+You are a competitive intelligence analyst.
 
-    Extract: pricing, menu items, promotions, strengths, weaknesses, sentiment, and USPs.
-    Return ONLY a clean JSON object. Do not include introductory text.
-    """
+Business being analyzed: {business_name}
+
+Competitor search results (real data only):
+{json.dumps(search_results, indent=2)}
+
+Your task:
+Extract ONLY information that appears in the search results.
+If a field is missing, return "unknown" — do NOT guess or hallucinate.
+
+Return JSON in the EXACT schema below:
+
+{{
+  "client": {{
+    "pricing": "",
+    "menu_items": "",
+    "promotions": "",
+    "strengths": "",
+    "weaknesses": "",
+    "sentiment": "",
+    "usps": ""
+  }},
+  "competitors": [
+    {{
+      "name": "",
+      "pricing": "",
+      "menu_items": "",
+      "promotions": "",
+      "strengths": "",
+      "weaknesses": "",
+      "sentiment": "",
+      "usps": ""
+    }}
+  ]
+}}
+
+Rules:
+- Use ONLY information from the search results.
+- Do NOT invent or assume anything.
+- Do NOT include commentary.
+- Output ONLY valid JSON.
+"""
 
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile", 
+        model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": "You are a competitive intelligence analyst. Output JSON only."},
             {"role": "user", "content": prompt}
         ],
-        response_format={"type": "json_object"} 
+        response_format={"type": "json_object"}
     )
 
     # 3. Clean and return the content
     content = response.choices[0].message.content.strip()
-    
-    # Remove markdown formatting if the AI added it accidentally
+
     if "```json" in content:
         content = content.split("```json")[1].split("```")[0].strip()
     elif "```" in content:
         content = content.split("```")[1].split("```")[0].strip()
 
-    return content
-    
+    return content    
 # ---------------- VALIDATE BUSINESS ----------------
 
 
@@ -592,7 +625,9 @@ def ai_competitor_intel(business_name: str, address: str):
         },
         "market": market,
         "ai_report": report_json
-    }# ---------------- ANALYSIS HISTORY ----------------
+    }
+    
+# ---------------- ANALYSIS HISTORY ----------------
 
 
 @app.get("/analysis-history")
