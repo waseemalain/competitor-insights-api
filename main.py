@@ -111,59 +111,99 @@ def ai_competitor_agent(business_name, competitors):
     """
     search_results = {}
 
-    # 1. Perform real web searches
+    # 1. Perform web searches for each competitor
     with DDGS() as ddgs:
         for comp in competitors:
             try:
-                query = f"{comp} {business_name} pricing menu reviews promotions 2026"
-                results = ddgs.text(query, max_results=5)
+                # Focus on menu, pricing, reviews, and sentiment
+                query = f"{comp} {business_name} coffee menu pricing reviews"
+                results = ddgs.text(query, max_results=8)
                 search_results[comp] = list(results)
             except Exception as e:
                 search_results[comp] = [{"error": str(e)}]
 
-    # 2. Build prompt for Groq (STRICT SCHEMA)
+    # 2. Build prompt for Groq (extraction + analysis)
     prompt = f"""
-You are a competitive intelligence analyst.
+You are a senior competitive intelligence analyst for local brick-and-mortar businesses.
 
-Business being analyzed: {business_name}
+Business being analyzed (client): {business_name}
 
-Competitor search results (real data only):
+You are given real web search snippets for nearby competitors:
 {json.dumps(search_results, indent=2)}
 
-Your task:
-Extract ONLY information that appears in the search results.
-If a field is missing, return "unknown" — do NOT guess or hallucinate.
+Your job has TWO stages:
 
-Return JSON in the EXACT schema below:
+1) EXTRACTION (STRUCTURED DATA)
+Extract ONLY information that appears in the search results. If a field is missing, return "unknown" — do NOT guess or hallucinate.
+
+You must return JSON in the EXACT schema below:
 
 {{
   "client": {{
-    "pricing": "",
-    "menu_items": "",
-    "promotions": "",
-    "strengths": "",
-    "weaknesses": "",
-    "sentiment": "",
-    "usps": ""
+    "summary": "",
+    "pricing": {{}},
+    "menu": [],
+    "sentiment": {{
+      "positive": [],
+      "negative": [],
+      "themes": []
+    }},
+    "strengths": [],
+    "weaknesses": [],
+    "usps": []
   }},
   "competitors": [
     {{
       "name": "",
-      "pricing": "",
-      "menu_items": "",
-      "promotions": "",
-      "strengths": "",
-      "weaknesses": "",
-      "sentiment": "",
-      "usps": ""
+      "pricing": {{}},
+      "menu": [],
+      "sentiment": {{
+        "positive": [],
+        "negative": [],
+        "themes": []
+      }},
+      "strengths": [],
+      "weaknesses": [],
+      "usps": []
     }}
-  ]
+  ],
+  "analysis": {{
+    "pricing_comparison": [],
+    "menu_overlap": [],
+    "sentiment_comparison": [],
+    "swot": {{
+      "strengths": [],
+      "weaknesses": [],
+      "opportunities": [],
+      "threats": []
+    }},
+    "recommendations": []
+  }}
 }}
+
+Field rules:
+- "pricing": use a dict like {{"low": "...", "high": "...", "typical_ticket": "..."}} when possible.
+- "menu": list of key items or categories (e.g. "Turkish coffee", "baklava", "cold brew", "sandwiches").
+- "sentiment.positive"/"sentiment.negative": short bullet-style phrases from reviews.
+- "sentiment.themes": patterns like "great service", "slow wait times", "cozy atmosphere".
+- "strengths"/"weaknesses"/"usps": short, concrete phrases.
+
+2) ANALYSIS (BUSINESS-READY INSIGHTS)
+Using ONLY the extracted data (no hallucinations), fill the "analysis" section:
+
+- "pricing_comparison": compare client vs competitors (who is cheaper, similar, more premium).
+- "menu_overlap": where the client offers similar items vs where they are unique.
+- "sentiment_comparison": how reviews differ (service, quality, atmosphere, value).
+- "swot.strengths": what the client does well vs competitors.
+- "swot.weaknesses": where the client is behind.
+- "swot.opportunities": gaps in the market, unmet needs, niches.
+- "swot.threats": strong competitors, pricing pressure, saturation.
+- "recommendations": 5–10 specific, actionable moves the client could take (pricing, menu, promotions, experience).
 
 Rules:
 - Use ONLY information from the search results.
 - Do NOT invent or assume anything.
-- Do NOT include commentary.
+- Do NOT include commentary outside the JSON.
 - Output ONLY valid JSON.
 """
 
@@ -178,74 +218,15 @@ Rules:
         response_format={"type": "json_object"}
     )
 
-    # 3. Clean and return the content
     content = response.choices[0].message.content.strip()
 
+    # Safety: strip markdown fences if they appear
     if "```json" in content:
         content = content.split("```json")[1].split("```")[0].strip()
     elif "```" in content:
         content = content.split("```")[1].split("```")[0].strip()
 
-    return content    
-# ---------------- VALIDATE BUSINESS ----------------
-
-
-@app.get("/validate-business")
-
-def validate_business(business_name: str, address: str):
-
-
-    url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-
-
-    params = {
-
-        "query": f"{business_name} {address}",
-
-        "key": GOOGLE_API_KEY
-
-    }
-
-
-    response = requests.get(url, params=params).json()
-
-
-    results = response.get("results", [])
-
-
-    if not results:
-
-        return {"error": "Business not found"}
-
-
-    top_results = []
-
-
-    for r in results[:3]:
-
-        top_results.append({
-
-            "name": r.get("name"),
-
-            "address": r.get("formatted_address"),
-
-            "rating": r.get("rating"),
-
-            "reviews": r.get("user_ratings_total"),
-
-            "place_id": r.get("place_id")
-
-        })
-
-
-    return {
-
-        "matches_found": len(top_results),
-
-        "results": top_results
-
-    }
-
+    return content
 
 
 # ---------------- CLIENT INFO ----------------
