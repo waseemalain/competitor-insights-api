@@ -120,7 +120,7 @@ def root():
 
 #-------------------------------------------------
 
-def ai_competitor_agent(business_name, competitors):
+def ai_competitor_agent(business_name, address, competitors):
     """
     AI agent using DDGS Local, Maps, Reviews + Groq (Llama 3.3) for analysis.
     """
@@ -136,19 +136,19 @@ def ai_competitor_agent(business_name, competitors):
 
             try:
                 # Local business info (address, phone, hours, categories)
-                comp_data["local"] = list(ddgs.local(f"{comp} near {business_name}", max_results=5))
+                comp_data["local"] = list(ddgs.local(f"{comp} {address}", max_results=5))
             except Exception as e:
                 comp_data["local"] = [{"error": str(e)}]
 
             try:
                 # Maps data (coordinates, categories, popularity)
-                comp_data["maps"] = list(ddgs.maps(f"{comp} near {business_name}", max_results=5))
+                comp_data["maps"] = list(ddgs.maps(f"{comp} {address}", max_results=5))
             except Exception as e:
                 comp_data["maps"] = [{"error": str(e)}]
 
             try:
                 # Reviews (actual review text)
-                comp_data["reviews"] = list(ddgs.reviews(f"{comp} near {business_name}", max_results=10))
+                comp_data["reviews"] = list(ddgs.reviews(f"{comp} {address}", max_results=10))
             except Exception as e:
                 comp_data["reviews"] = [{"error": str(e)}]
 
@@ -392,10 +392,13 @@ def get_nearby(lat, lng, radius, place_types, client_place_id):
 
     url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
 
+    # Convert ["coffee_shop", "bakery"] → "coffee_shop bakery"
+    keyword_string = " ".join(place_types)
+
     params = {
         "location": f"{lat},{lng}",
         "radius": radius,
-        "type": "|".join(place_types),  # allow multiple types
+        "keyword": keyword_string,   # <-- FIXED
         "key": GOOGLE_API_KEY
     }
 
@@ -404,11 +407,10 @@ def get_nearby(lat, lng, radius, place_types, client_place_id):
 
     while "next_page_token" in response:
         time.sleep(2)
-        params = {
+        response = requests.get(url, params={
             "pagetoken": response["next_page_token"],
             "key": GOOGLE_API_KEY
-        }
-        response = requests.get(url, params=params).json()
+        }).json()
         results.extend(response.get("results", []))
 
     competitors = []
@@ -437,7 +439,6 @@ def get_nearby(lat, lng, radius, place_types, client_place_id):
         })
 
     return competitors
-
 
 
 # ---------------- COMPETITOR ENDPOINT ----------------
@@ -520,7 +521,7 @@ def ai_competitor_intel(
 
     # 5. Use 3-mile competitors for AI deep dive
     comp_names = [c["name"] for c in radius3][:5]
-    report_raw = ai_competitor_agent(client_info["name"], comp_names)
+    report_raw = ai_competitor_agent(client_info["name"], address, comp_names)
 
     try:
         report_json = json.loads(report_raw)
