@@ -429,17 +429,12 @@ def get_nearby(lat, lng, radius, place_types, client_place_id):
 
 
 @app.post("/competitors")
-def competitors(
-    business_name: str,
-    address: str,
-    types: CompetitorTypeRequest
-):
+def competitors(data: CompetitorTypeRequest, business_name: str = "", address: str = ""):
     client = get_client_info(business_name, address)
     if not client:
         return {"error": "Business not found"}
 
-    # Use user-selected competitor types
-    selected_types = types.subcategories
+    selected_types = data.subcategories
 
     market = get_market_data(client["lat"], client["lng"])
 
@@ -480,7 +475,7 @@ def competitors(
         "radius_3_mile": radius3,
         "radius_5_mile": radius5
     }
-
+    
 # --------------AI-COMPETITOR-INTEL ENDPOINT-------
 
 @app.post("/ai-competitor-intel")
